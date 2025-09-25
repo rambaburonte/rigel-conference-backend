@@ -295,7 +295,7 @@ private IPolymersRegistrationFormRepository polymerRegistrationFormRepository;
             case "renewable":
                 return ResponseEntity.ok(renewablePresentationTypeRepo.findAll());
             case "polymers":
-+                return ResponseEntity.ok(polymerPresentationTypeRepo.findAll());
+                return ResponseEntity.ok(polymerPresentationTypeRepo.findAll());
             default:
                 log.warn("Unknown domain: {}, defaulting to nursing", domain);
                 return ResponseEntity.ok(nursingPresentationTypeRepo.findAll());
