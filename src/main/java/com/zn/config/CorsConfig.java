@@ -17,21 +17,7 @@ public class CorsConfig implements WebMvcConfigurer {
     @Override
     public void addCorsMappings(CorsRegistry registry) {
         registry.addMapping("/**")
-                .allowedOriginPatterns(
-                    "https://renewable-meet-2026.vercel.app",
-                    "https://globalrenewablemeet.com",
-                    "https://globallopmeet.com",
-                    "https://nursingmeet2026.com",
-                    "https://api.zynmarketing.xyz",
-                    "https://polytest.marketingzynlogic.com",
-                    "https://polyscienceconference.com",
-                    "http://localhost:*",
-                    "https://localhost:*",
-                    "http://127.0.0.1:*",
-                    "http://147.93.102.131:*",
-                    "https://*.marketingzynlogic.com",
-                    "https://*.vercel.app"
-                )
+                .allowedOriginPatterns("*")
                 .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH")
                 .allowedHeaders("*")
                 .allowCredentials(true)
@@ -41,22 +27,7 @@ public class CorsConfig implements WebMvcConfigurer {
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration configuration = new CorsConfiguration();
-        configuration.setAllowedOriginPatterns(Arrays.asList(
-            "https://renewable-meet-2026.vercel.app",
-            "https://globalrenewablemeet.com",
-            "https://globallopmeet.com",
-            "https://nursingmeet2026.com",
-            "https://api.zynmarketing.xyz",
-            "https://polytest.marketingzynlogic.com",
-            "https://polyscienceconference.com/*",
-            "https://polyscienceconference.com",
-            "http://localhost:*",
-            "https://localhost:*",
-            "http://127.0.0.1:*",
-            "http://147.93.102.131:*",
-            "https://*.marketingzynlogic.com",
-            "https://*.vercel.app"
-        ));
+        configuration.setAllowedOriginPatterns(Arrays.asList("*"));
         configuration.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"));
         configuration.setAllowedHeaders(Arrays.asList("*"));
         configuration.setAllowCredentials(true);
