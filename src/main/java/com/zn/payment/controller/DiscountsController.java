@@ -16,8 +16,12 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.stripe.model.Event;
 import com.zn.payment.dto.CreateDiscountSessionRequest;
+import com.zn.payment.nursing.repository.NursingDiscountsRepository;
 import com.zn.payment.nursing.service.NursingDiscountsService;
+import com.zn.payment.optics.repository.OpticsDiscountsRepository;
 import com.zn.payment.optics.service.OpticsDiscountsService;
+import com.zn.payment.polymers.repository.PolymersDiscountsRepository;
+import com.zn.payment.renewable.repository.RenewableDiscountsRepository;
 import com.zn.payment.renewable.service.RenewableDiscountsService;
 
 import jakarta.servlet.http.HttpServletRequest;
@@ -40,6 +44,18 @@ public class DiscountsController {
 
     @Autowired
     private com.zn.payment.polymers.service.PolymersDiscountsService polymersDiscountsService;
+
+    @Autowired
+    private OpticsDiscountsRepository opticsDiscountsRepository;
+    
+    @Autowired
+    private NursingDiscountsRepository nursingDiscountsRepository;
+    
+    @Autowired
+    private RenewableDiscountsRepository renewableDiscountsRepository;
+    
+    @Autowired
+    private PolymersDiscountsRepository polymersDiscountsRepository;
 
     // create stripe session
     @PostMapping("/create-session")
@@ -75,6 +91,116 @@ public class DiscountsController {
         }
     }
     
+    /**
+     * Update discount payment status - uses existing discount service methods
+     * Routes to appropriate discount service based on Origin/Referer headers
+     */
+    @PostMapping("/update")
+    public ResponseEntity<?> updateDiscountPaymentStatus(@RequestBody java.util.Map<String, String> request, HttpServletRequest httpRequest) {
+        String sessionId = request.get("sessionId");
+        if (sessionId == null || sessionId.trim().isEmpty()) {
+            return ResponseEntity.badRequest().body("sessionId is required");
+        }
+        
+        String origin = httpRequest.getHeader("Origin");
+        String referer = httpRequest.getHeader("Referer");
+        
+        log.info("🔄 Updating discount payment status for session: {} from origin: {}, referer: {}", sessionId, origin, referer);
+        
+        try {
+            // Route based on domain
+            if ((origin != null && origin.contains("globallopmeet.com")) || 
+                (referer != null && referer.contains("globallopmeet.com"))) {
+                // Route to Optics discount service
+                log.info("🎯 Routing to OpticsDiscountsService for session: {}", sessionId);
+                boolean updated = opticsDiscountsService.updatePaymentStatusBySessionId(sessionId, "paid");
+                return ResponseEntity.ok(java.util.Map.of("updated", updated, "sessionId", sessionId, "service", "optics"));
+            } else if ((origin != null && origin.contains("polyscienceconference.com")) || 
+                       (referer != null && referer.contains("polyscienceconference.com"))) {
+                // Route to Polymers discount service
+                log.info("🎯 Routing to PolymersDiscountsService for session: {}", sessionId);
+                boolean updated = polymersDiscountsService.updatePaymentStatusBySessionId(sessionId, "paid");
+                return ResponseEntity.ok(java.util.Map.of("updated", updated, "sessionId", sessionId, "service", "polymers"));
+            } else if ((origin != null && origin.contains("nursingmeet2026.com")) || 
+                       (referer != null && referer.contains("nursingmeet2026.com"))) {
+                // Route to Nursing discount service
+                log.info("🎯 Routing to NursingDiscountsService for session: {}", sessionId);
+                boolean updated = nursingDiscountsService.updatePaymentStatusBySessionId(sessionId, "paid");
+                return ResponseEntity.ok(java.util.Map.of("updated", updated, "sessionId", sessionId, "service", "nursing"));
+            } else if ((origin != null && origin.contains("globalrenewablemeet.com")) || 
+                       (referer != null && referer.contains("globalrenewablemeet.com"))) {
+                // Route to Renewable discount service
+                log.info("🎯 Routing to RenewableDiscountsService for session: {}", sessionId);
+                boolean updated = renewableDiscountsService.updatePaymentStatusBySessionId(sessionId, "paid");
+                return ResponseEntity.ok(java.util.Map.of("updated", updated, "sessionId", sessionId, "service", "renewable"));
+            } else {
+                // Default to nursing discount service for backward compatibility
+                log.info("🎯 Routing to NursingDiscountsService (default) for session: {}", sessionId);
+                boolean updated = nursingDiscountsService.updatePaymentStatusBySessionId(sessionId, "paid");
+                return ResponseEntity.ok(java.util.Map.of("updated", updated, "sessionId", sessionId, "service", "nursing-default"));
+            }
+        } catch (Exception e) {
+            log.error("❌ Error updating discount payment status for session {}: {}", sessionId, e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body("Error updating discount payment status: " + e.getMessage());
+        }
+    }
+    
+    /**
+     * Get discount payment status from database - uses repository to find discount records
+     * Routes to appropriate discount service based on Origin/Referer headers
+     */
+    @PostMapping("/status")
+    public ResponseEntity<?> getDiscountPaymentStatus(@RequestBody java.util.Map<String, String> request, HttpServletRequest httpRequest) {
+        String sessionId = request.get("sessionId");
+        if (sessionId == null || sessionId.trim().isEmpty()) {
+            return ResponseEntity.badRequest().body("sessionId is required");
+        }
+        
+        String origin = httpRequest.getHeader("Origin");
+        String referer = httpRequest.getHeader("Referer");
+        
+        log.info("📋 Getting discount payment status for session: {} from origin: {}, referer: {}", sessionId, origin, referer);
+        
+        try {
+            // Route based on domain
+            if ((origin != null && origin.contains("globallopmeet.com")) || 
+                (referer != null && referer.contains("globallopmeet.com"))) {
+                // Route to Optics discount repository
+                log.info("🎯 Routing to OpticsDiscountsRepository for session: {}", sessionId);
+                var result = opticsDiscountsRepository.findBySessionId(sessionId);
+                return ResponseEntity.ok(result != null ? result : java.util.Map.of("error", "No optics discount found for session: " + sessionId));
+            } else if ((origin != null && origin.contains("polyscienceconference.com")) || 
+                       (referer != null && referer.contains("polyscienceconference.com"))) {
+                // Route to Polymers discount repository
+                log.info("🎯 Routing to PolymersDiscountsRepository for session: {}", sessionId);
+                var result = polymersDiscountsRepository.findBySessionId(sessionId);
+                return ResponseEntity.ok(result != null ? result : java.util.Map.of("error", "No polymers discount found for session: " + sessionId));
+            } else if ((origin != null && origin.contains("nursingmeet2026.com")) || 
+                       (referer != null && referer.contains("nursingmeet2026.com"))) {
+                // Route to Nursing discount repository
+                log.info("🎯 Routing to NursingDiscountsRepository for session: {}", sessionId);
+                var result = nursingDiscountsRepository.findBySessionId(sessionId);
+                return ResponseEntity.ok(result != null ? result : java.util.Map.of("error", "No nursing discount found for session: " + sessionId));
+            } else if ((origin != null && origin.contains("globalrenewablemeet.com")) || 
+                       (referer != null && referer.contains("globalrenewablemeet.com"))) {
+                // Route to Renewable discount repository
+                log.info("🎯 Routing to RenewableDiscountsRepository for session: {}", sessionId);
+                var result = renewableDiscountsRepository.findBySessionId(sessionId);
+                return ResponseEntity.ok(result != null ? result : java.util.Map.of("error", "No renewable discount found for session: " + sessionId));
+            } else {
+                // Default to nursing discount repository for backward compatibility
+                log.info("🎯 Routing to NursingDiscountsRepository (default) for session: {}", sessionId);
+                var result = nursingDiscountsRepository.findBySessionId(sessionId);
+                return ResponseEntity.ok(result != null ? result : java.util.Map.of("error", "No nursing discount found for session: " + sessionId));
+            }
+        } catch (Exception e) {
+            log.error("❌ Error getting discount payment status for session {}: {}", sessionId, e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body("Error getting discount payment status: " + e.getMessage());
+        }
+    }
+
     // handle stripe webhook - ONLY for discount payments
     @PostMapping("/webhook")
     public ResponseEntity<String> handleStripeWebhook(HttpServletRequest request) throws IOException {
