@@ -594,6 +594,112 @@ public class PaymentController {
         }
     }
     
+    // === PAYMENT STATUS MANAGEMENT ENDPOINTS ===
+    
+    /**
+     * Update payment status from Stripe - fetches latest status and updates database
+     * POST /api/payment/update?sessionId=xxx
+     */
+    @PostMapping("/update")
+    public ResponseEntity<?> updatePaymentStatus(@RequestParam String sessionId, HttpServletRequest httpRequest) {
+        log.info("Updating payment status for session: {}", sessionId);
+        
+        String origin = httpRequest.getHeader("Origin");
+        if (origin == null) {
+            origin = httpRequest.getHeader("Referer");
+        }
+        
+        try {
+            // Route to appropriate service based on domain/origin
+            if (origin != null && origin.contains("globallopmeet.com")) {
+                return ResponseEntity.ok(opticsStripeService.updatePaymentStatus(sessionId));
+            } else if (origin != null && origin.contains("nursingmeet2026.com")) {
+                return ResponseEntity.ok(nursingStripeService.updatePaymentStatus(sessionId));
+            } else if (origin != null && origin.contains("globalrenewablemeet.com")) {
+                return ResponseEntity.ok(renewableStripeService.updatePaymentStatus(sessionId));
+            } else if (origin != null && origin.contains("polyscienceconference.com")) {
+                return ResponseEntity.ok(polymersStripeService.updatePaymentStatus(sessionId));
+            } else {
+                // Try all services to find the session
+                try {
+                    return ResponseEntity.ok(opticsStripeService.updatePaymentStatus(sessionId));
+                } catch (Exception e1) {
+                    try {
+                        return ResponseEntity.ok(nursingStripeService.updatePaymentStatus(sessionId));
+                    } catch (Exception e2) {
+                        try {
+                            return ResponseEntity.ok(renewableStripeService.updatePaymentStatus(sessionId));
+                        } catch (Exception e3) {
+                            try {
+                                return ResponseEntity.ok(polymersStripeService.updatePaymentStatus(sessionId));
+                            } catch (Exception e4) {
+                                log.error("Session not found in any service: {}", sessionId);
+                                return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                                        .body(createErrorResponse("session_not_found"));
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.error("Error updating payment status for session {}: {}", sessionId, e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(createErrorResponse("update_failed"));
+        }
+    }
+    
+    /**
+     * Get payment status from database - returns stored record without calling Stripe
+     * GET /api/payment/status/{sessionId}
+     */
+    @GetMapping("/status/{sessionId}")
+    public ResponseEntity<?> getPaymentStatus(@PathVariable String sessionId, HttpServletRequest httpRequest) {
+        log.info("Getting payment status for session: {}", sessionId);
+        
+        String origin = httpRequest.getHeader("Origin");
+        if (origin == null) {
+            origin = httpRequest.getHeader("Referer");
+        }
+        
+        try {
+            // Route to appropriate service based on domain/origin
+            if (origin != null && origin.contains("globallopmeet.com")) {
+                return ResponseEntity.ok(opticsStripeService.getPaymentStatus(sessionId));
+            } else if (origin != null && origin.contains("nursingmeet2026.com")) {
+                return ResponseEntity.ok(nursingStripeService.getPaymentStatus(sessionId));
+            } else if (origin != null && origin.contains("globalrenewablemeet.com")) {
+                return ResponseEntity.ok(renewableStripeService.getPaymentStatus(sessionId));
+            } else if (origin != null && origin.contains("polyscienceconference.com")) {
+                return ResponseEntity.ok(polymersStripeService.getPaymentStatus(sessionId));
+            } else {
+                // Try all services to find the session
+                try {
+                    return ResponseEntity.ok(opticsStripeService.getPaymentStatus(sessionId));
+                } catch (Exception e1) {
+                    try {
+                        return ResponseEntity.ok(nursingStripeService.getPaymentStatus(sessionId));
+                    } catch (Exception e2) {
+                        try {
+                            return ResponseEntity.ok(renewableStripeService.getPaymentStatus(sessionId));
+                        } catch (Exception e3) {
+                            try {
+                                return ResponseEntity.ok(polymersStripeService.getPaymentStatus(sessionId));
+                            } catch (Exception e4) {
+                                log.error("Payment record not found in any service: {}", sessionId);
+                                return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                                        .body(createErrorResponse("payment_not_found"));
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.error("Error getting payment status for session {}: {}", sessionId, e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(createErrorResponse("status_retrieval_failed"));
+        }
+    }
+    
     // Generic error response for cases where we don't know the vertical
     private Object createErrorResponse(String errorMessage) {
         return java.util.Map.of(

@@ -1489,6 +1489,91 @@ public NursingPaymentResponseDTO retrieveSession(String sessionId) throws Stripe
             throw new RuntimeException("Failed to create mandatory registration-payment association: " + e.getMessage());
         }
     }
+    
+    /**
+     * Update payment status from Stripe - follows same pattern as webhook processing
+     * Fetches latest session data from Stripe and updates database record
+     */
+    public NursingPaymentRecord updatePaymentStatus(String sessionId) throws StripeException {
+        log.info("🔄 Updating payment status for Nursing session: {} (webhook-style processing)", sessionId);
+        
+        // 1. Fetch latest session data from Stripe (same as webhook does)
+        Stripe.apiKey = secretKey;
+        com.stripe.model.checkout.Session stripeSession = com.stripe.model.checkout.Session.retrieve(sessionId);
+        
+        // 2. Find existing payment record (same as webhook does)
+        NursingPaymentRecord paymentRecord = paymentRecordRepository.findBySessionId(sessionId)
+                .orElseThrow(() -> new RuntimeException("Payment record not found for session: " + sessionId));
+        
+        log.info("📋 Found existing PaymentRecord ID: {} for session: {}", paymentRecord.getId(), sessionId);
+        
+        // 3. Update record with Stripe data (EXACTLY like webhook processing)
+        // Sample: "payment_intent": "pi_1PABC1SDxA1b23dEfGHIjklm"
+        paymentRecord.setPaymentIntentId(stripeSession.getPaymentIntent());
+        
+        // Sample: "status": "complete" indicates successful payment
+        if ("complete".equals(stripeSession.getStatus())) {
+            paymentRecord.setStatus(NursingPaymentRecord.PaymentStatus.COMPLETED);
+        }
+        
+        // Sample: "payment_status": "paid" indicates payment was successful
+        String stripePaymentStatus = stripeSession.getPaymentStatus();
+        paymentRecord.setPaymentStatus(stripePaymentStatus != null ? stripePaymentStatus : "paid");
+        
+        // Update customer email from Stripe data
+        String customerEmail = stripeSession.getCustomerDetails() != null ? 
+            stripeSession.getCustomerDetails().getEmail() : stripeSession.getCustomerEmail();
+        if (paymentRecord.getCustomerEmail() == null && customerEmail != null) {
+            paymentRecord.setCustomerEmail(customerEmail);
+        }
+        
+        // Update amount from Stripe data
+        if (stripeSession.getAmountTotal() != null) {
+            BigDecimal stripeAmountInEuros = BigDecimal.valueOf(stripeSession.getAmountTotal()).divide(BigDecimal.valueOf(100));
+            if (paymentRecord.getAmountTotal() == null || 
+                paymentRecord.getAmountTotal().compareTo(stripeAmountInEuros) != 0) {
+                log.info("💰 Updating amount from {} to {} EUR based on Stripe data", 
+                        paymentRecord.getAmountTotal(), stripeAmountInEuros);
+                paymentRecord.setAmountTotal(stripeAmountInEuros);
+            }
+        }
+        
+        // Update currency
+        if (stripeSession.getCurrency() != null) {
+            paymentRecord.setCurrency(stripeSession.getCurrency().toUpperCase());
+        }
+        
+        // Update timestamps
+        if (stripeSession.getCreated() != null) {
+            paymentRecord.setStripeCreatedAt(convertToLocalDateTime(stripeSession.getCreated()));
+        }
+        
+        paymentRecord.setUpdatedAt(LocalDateTime.now());
+        
+        // 4. Save updated record (same as webhook does)
+        NursingPaymentRecord updatedRecord = paymentRecordRepository.save(paymentRecord);
+        
+        // 5. Auto-sync discount table (same as webhook does)
+        autoSyncDiscountOnPaymentUpdate(updatedRecord);
+        
+        log.info("✅ Updated Nursing payment record ID: {} for session: {} (webhook-style)", 
+                updatedRecord.getId(), sessionId);
+        
+        return updatedRecord;
+    }
+    
+    /**
+     * Get payment status from database - returns stored record without calling Stripe
+     */
+    public NursingPaymentRecord getPaymentStatus(String sessionId) {
+        log.info("Getting payment status for Nursing session: {}", sessionId);
+        
+        NursingPaymentRecord paymentRecord = paymentRecordRepository.findBySessionId(sessionId)
+                .orElseThrow(() -> new RuntimeException("Payment record not found for session: " + sessionId));
+        
+        log.info("✅ Retrieved Nursing payment record for session: {}", sessionId);
+        return paymentRecord;
+    }
 
     // ...existing code...
 }

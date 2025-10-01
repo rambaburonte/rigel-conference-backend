@@ -21,7 +21,6 @@ import com.zn.nursing.repository.INursingPresentationTypeRepo;
 import com.zn.nursing.repository.INursingPricingConfigRepository;
 import com.zn.nursing.repository.INursingRegistrationFormRepository;
 import com.zn.optics.entity.OpticsPresentationType;
-// Vertical-specific entities and repositories for domain-based routing
 import com.zn.optics.entity.OpticsPricingConfig;
 import com.zn.optics.entity.OpticsRegistrationForm;
 import com.zn.optics.repository.IOpricsRegistrationFormRepository;
