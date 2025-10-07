@@ -197,8 +197,8 @@ public class PolymersStripeService {
         // Build Stripe SessionCreateParams - enforcing EUR currency
         SessionCreateParams params = SessionCreateParams.builder()
             .setMode(SessionCreateParams.Mode.PAYMENT)
-            .setSuccessUrl(request.getSuccessUrl())
-            .setCancelUrl(request.getCancelUrl())
+            .setSuccessUrl(request.getSuccessUrl() + "?session_id={CHECKOUT_SESSION_ID}")
+            .setCancelUrl(request.getCancelUrl() + "?session_id={CHECKOUT_SESSION_ID}")
             .addPaymentMethodType(SessionCreateParams.PaymentMethodType.CARD)
             .setExpiresAt(expirationTime.toEpochSecond())
             .putAllMetadata(metadata)
@@ -1426,6 +1426,99 @@ public PolymersPaymentResponseDTO retrieveSession(String sessionId) throws Strip
         
         log.info("✅ Retrieved Polymers payment record for session: {}", sessionId);
         return paymentRecord;
+    }
+    
+    // ======================= PAYPAL INTEGRATION =======================
+    
+    /**
+     * Create PayPal order for Polymers payments
+     */
+    public com.zn.payment.dto.PayPalOrderResponse createPayPalOrder(com.zn.payment.dto.PayPalCreateOrderRequest request) {
+        log.info("Creating PayPal order for Polymers - Amount: {} {}, Customer: {}", 
+                request.getAmount(), request.getCurrency(), request.getCustomerEmail());
+        
+        try {
+            // Validate request
+            if (request.getCustomerEmail() == null || request.getCustomerEmail().trim().isEmpty()) {
+                throw new IllegalArgumentException("Customer email is required for PayPal order");
+            }
+            
+            if (request.getAmount() == null || request.getAmount().compareTo(java.math.BigDecimal.ZERO) <= 0) {
+                throw new IllegalArgumentException("Amount must be greater than zero");
+            }
+            
+            // Create payment record with PayPal provider
+            PolymersPaymentRecord paymentRecord = PolymersPaymentRecord.builder()
+                    .sessionId("PAYPAL_PENDING_" + System.currentTimeMillis()) // Temporary ID until PayPal returns order ID
+                    .customerEmail(request.getCustomerEmail())
+                    .amountTotal(request.getAmount())
+                    .currency(request.getCurrency() != null ? request.getCurrency().toLowerCase() : "eur")
+                    .provider("PAYPAL")
+                    .status(PolymersPaymentRecord.PaymentStatus.PENDING)
+                    .paymentStatus("unpaid")
+                    .stripeCreatedAt(java.time.LocalDateTime.now())
+                    .build();
+            
+            // Save initial record
+            PolymersPaymentRecord savedRecord = paymentRecordRepository.save(paymentRecord);
+            log.info("💾 Saved initial Polymers PayPal payment record with ID: {}", savedRecord.getId());
+            
+            // For now, return a mock PayPal response (you'll replace this with actual PayPal SDK call)
+            String mockOrderId = "PAYPAL_ORDER_" + System.currentTimeMillis();
+            String mockApprovalUrl = "https://www.paypal.com/checkoutnow?token=" + mockOrderId;
+            
+            // Update record with actual PayPal order ID
+            savedRecord.setSessionId(mockOrderId);
+            paymentRecordRepository.save(savedRecord);
+            
+            log.info("✅ Created PayPal order for Polymers: {}", mockOrderId);
+            
+            return com.zn.payment.dto.PayPalOrderResponse.success(
+                    mockOrderId, 
+                    mockApprovalUrl, 
+                    request.getCustomerEmail(),
+                    request.getAmount().toString(),
+                    request.getCurrency()
+            );
+            
+        } catch (Exception e) {
+            log.error("❌ Error creating PayPal order for Polymers: {}", e.getMessage(), e);
+            return com.zn.payment.dto.PayPalOrderResponse.error("paypal_order_creation_failed: " + e.getMessage());
+        }
+    }
+    
+    /**
+     * Capture PayPal order for Polymers payments
+     */
+    public com.zn.payment.dto.PayPalOrderResponse capturePayPalOrder(String orderId) {
+        log.info("Capturing PayPal order for Polymers: {}", orderId);
+        
+        try {
+            // Find payment record
+            PolymersPaymentRecord paymentRecord = paymentRecordRepository.findBySessionId(orderId)
+                    .orElseThrow(() -> new RuntimeException("PayPal payment record not found for order: " + orderId));
+            
+            // For now, simulate successful capture (you'll replace this with actual PayPal SDK call)
+            paymentRecord.setStatus(PolymersPaymentRecord.PaymentStatus.COMPLETED);
+            paymentRecord.setPaymentStatus("paid");
+            paymentRecord.setUpdatedAt(java.time.LocalDateTime.now());
+            
+            // Save updated record
+            PolymersPaymentRecord updatedRecord = paymentRecordRepository.save(paymentRecord);
+            log.info("✅ PayPal order captured for Polymers: {}", orderId);
+            
+            return com.zn.payment.dto.PayPalOrderResponse.success(
+                    orderId,
+                    null, // No approval URL needed for capture
+                    updatedRecord.getCustomerEmail(),
+                    updatedRecord.getAmountTotal().toString(),
+                    updatedRecord.getCurrency()
+            );
+            
+        } catch (Exception e) {
+            log.error("❌ Error capturing PayPal order for Polymers: {}", e.getMessage(), e);
+            return com.zn.payment.dto.PayPalOrderResponse.error("paypal_capture_failed: " + e.getMessage());
+        }
     }
 
     // ...existing code...

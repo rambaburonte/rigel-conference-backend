@@ -30,6 +30,9 @@ import com.zn.optics.repository.IOpticsPricingConfigRepository;
 import com.zn.payment.dto.CheckoutRequest;
 import com.zn.payment.dto.NursingPaymentResponseDTO;
 import com.zn.payment.dto.OpticsPaymentResponseDTO;
+import com.zn.payment.dto.PayPalCaptureOrderRequest;
+import com.zn.payment.dto.PayPalCreateOrderRequest;
+import com.zn.payment.dto.PayPalOrderResponse;
 import com.zn.payment.dto.RenewablePaymentResponseDTO;
 import com.zn.payment.nursing.entity.NursingDiscounts;
 import com.zn.payment.nursing.entity.NursingPaymentRecord;
@@ -263,7 +266,7 @@ public class PaymentController {
         }
     }
 
-    @PostMapping("/webhook")
+    @PostMapping("/test/webhook")
     public ResponseEntity<String> handleWebhook(HttpServletRequest request) throws IOException {
         log.info("#####################   Received payment webhook request ######################");
         String payload;
@@ -707,6 +710,227 @@ public class PaymentController {
             "error", errorMessage,
             "paymentStatus", errorMessage
         );
+    }
+    
+    // ======================= PAYPAL INTEGRATION =======================
+    
+    /**
+     * Create PayPal order with domain-based routing
+     * POST /api/payment/paypal/create
+     */
+    @PostMapping("/paypal/create")
+    public ResponseEntity<?> createPayPalOrder(@RequestBody PayPalCreateOrderRequest request, HttpServletRequest httpRequest) {
+        log.info("Creating PayPal order for customer: {} with amount: {} {}", 
+                request.getCustomerEmail(), request.getAmount(), request.getCurrency());
+        
+        String origin = httpRequest.getHeader("Origin");
+        if (origin == null) {
+            origin = httpRequest.getHeader("Referer");
+        }
+        
+        if (origin == null) {
+            log.error("Origin or Referer header is missing for PayPal order creation");
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(PayPalOrderResponse.error("origin_or_referer_missing"));
+        }
+        
+        try {
+            // Route to appropriate service based on domain
+            if (origin.contains("globallopmeet.com")) {
+                log.info("Processing PayPal order for Optics domain: {}", origin);
+                return handleOpticsPayPalOrder(request);
+            } else if (origin.contains("nursingmeet2026.com")) {
+                log.info("Processing PayPal order for Nursing domain: {}", origin);
+                return handleNursingPayPalOrder(request);
+            } else if (origin.contains("globalrenewablemeet.com")) {
+                log.info("Processing PayPal order for Renewable domain: {}", origin);
+                return handleRenewablePayPalOrder(request);
+            } else if (origin.contains("polyscienceconference.com")) {
+                log.info("Processing PayPal order for Polymers domain: {}", origin);
+                return handlePolymersPayPalOrder(request);
+            } else {
+                log.error("Unknown frontend domain for PayPal: {}", origin + "default to polymers");
+                return handlePolymersPayPalOrder(request);
+            }
+        } catch (Exception e) {
+            log.error("Error creating PayPal order: {}", e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(PayPalOrderResponse.error("paypal_order_creation_failed"));
+        }
+    }
+    
+    /**
+     * Capture PayPal order with domain-based routing
+     * POST /api/payment/paypal/capture
+     */
+    @PostMapping("/paypal/capture")
+    public ResponseEntity<?> capturePayPalOrder(@RequestBody PayPalCaptureOrderRequest request, HttpServletRequest httpRequest) {
+        log.info("Capturing PayPal order: {}", request.getOrderId());
+        
+        String origin = httpRequest.getHeader("Origin");
+        if (origin == null) {
+            origin = httpRequest.getHeader("Referer");
+        }
+        
+        try {
+            // Route to appropriate service based on domain
+            if (origin != null && origin.contains("globallopmeet.com")) {
+                return ResponseEntity.ok(opticsStripeService.capturePayPalOrder(request.getOrderId()));
+            } else if (origin != null && origin.contains("nursingmeet2026.com")) {
+                return ResponseEntity.ok(nursingStripeService.capturePayPalOrder(request.getOrderId()));
+            } else if (origin != null && origin.contains("globalrenewablemeet.com")) {
+                return ResponseEntity.ok(renewableStripeService.capturePayPalOrder(request.getOrderId()));
+            } else if (origin != null && origin.contains("polyscienceconference.com")) {
+                return ResponseEntity.ok(polymersStripeService.capturePayPalOrder(request.getOrderId()));
+            } else {
+                // Try all services to find the PayPal order
+                try {
+                    return ResponseEntity.ok(opticsStripeService.capturePayPalOrder(request.getOrderId()));
+                } catch (Exception e1) {
+                    try {
+                        return ResponseEntity.ok(nursingStripeService.capturePayPalOrder(request.getOrderId()));
+                    } catch (Exception e2) {
+                        try {
+                            return ResponseEntity.ok(renewableStripeService.capturePayPalOrder(request.getOrderId()));
+                        } catch (Exception e3) {
+                            try {
+                                return ResponseEntity.ok(polymersStripeService.capturePayPalOrder(request.getOrderId()));
+                            } catch (Exception e4) {
+                                log.error("PayPal order not found in any service: {}", request.getOrderId());
+                                return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                                        .body(PayPalOrderResponse.error("paypal_order_not_found"));
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.error("Error capturing PayPal order {}: {}", request.getOrderId(), e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(PayPalOrderResponse.error("paypal_capture_failed"));
+        }
+    }
+    
+    // === PAYPAL VERTICAL HANDLERS ===
+    
+    private ResponseEntity<PayPalOrderResponse> handleOpticsPayPalOrder(PayPalCreateOrderRequest request) {
+        try {
+            log.info("Creating PayPal order for Optics with amount: {} {}", request.getAmount(), request.getCurrency());
+            
+            // Validate pricing config if provided
+            if (request.getPricingConfigId() != null) {
+                OpticsPricingConfig pricingConfig = opticsPricingConfigRepository.findById(request.getPricingConfigId())
+                        .orElseThrow(() -> new IllegalArgumentException("Pricing config not found with ID: " + request.getPricingConfigId()));
+                
+                // Use backend pricing
+                request.setAmount(pricingConfig.getTotalPrice());
+                log.info("Using backend total price for PayPal: {} EUR", pricingConfig.getTotalPrice());
+            }
+            
+            // Call optics service to create PayPal order
+            PayPalOrderResponse response = opticsStripeService.createPayPalOrder(request);
+            log.info("Optics PayPal order created successfully. Order ID: {}", response.getOrderId());
+            return ResponseEntity.ok(response);
+            
+        } catch (IllegalArgumentException e) {
+            log.error("Validation error creating Optics PayPal order: {}", e.getMessage());
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(PayPalOrderResponse.error("validation_failed"));
+        } catch (Exception e) {
+            log.error("Error creating Optics PayPal order: {}", e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(PayPalOrderResponse.error("paypal_order_creation_failed"));
+        }
+    }
+    
+    private ResponseEntity<PayPalOrderResponse> handleNursingPayPalOrder(PayPalCreateOrderRequest request) {
+        try {
+            log.info("Creating PayPal order for Nursing with amount: {} {}", request.getAmount(), request.getCurrency());
+            
+            // Validate pricing config if provided
+            if (request.getPricingConfigId() != null) {
+                com.zn.nursing.entity.NursingPricingConfig pricingConfig = nursingPricingConfigRepository.findById(request.getPricingConfigId())
+                        .orElseThrow(() -> new IllegalArgumentException("Pricing config not found with ID: " + request.getPricingConfigId()));
+                
+                // Use backend pricing
+                request.setAmount(pricingConfig.getTotalPrice());
+                log.info("Using backend total price for PayPal: {} EUR", pricingConfig.getTotalPrice());
+            }
+            
+            // Call nursing service to create PayPal order
+            PayPalOrderResponse response = nursingStripeService.createPayPalOrder(request);
+            log.info("Nursing PayPal order created successfully. Order ID: {}", response.getOrderId());
+            return ResponseEntity.ok(response);
+            
+        } catch (IllegalArgumentException e) {
+            log.error("Validation error creating Nursing PayPal order: {}", e.getMessage());
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(PayPalOrderResponse.error("validation_failed"));
+        } catch (Exception e) {
+            log.error("Error creating Nursing PayPal order: {}", e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(PayPalOrderResponse.error("paypal_order_creation_failed"));
+        }
+    }
+    
+    private ResponseEntity<PayPalOrderResponse> handleRenewablePayPalOrder(PayPalCreateOrderRequest request) {
+        try {
+            log.info("Creating PayPal order for Renewable with amount: {} {}", request.getAmount(), request.getCurrency());
+            
+            // Validate pricing config if provided
+            if (request.getPricingConfigId() != null) {
+                com.zn.renewable.entity.RenewablePricingConfig pricingConfig = renewablePricingConfigRepository.findById(request.getPricingConfigId())
+                        .orElseThrow(() -> new IllegalArgumentException("Pricing config not found with ID: " + request.getPricingConfigId()));
+                
+                // Use backend pricing
+                request.setAmount(pricingConfig.getTotalPrice());
+                log.info("Using backend total price for PayPal: {} EUR", pricingConfig.getTotalPrice());
+            }
+            
+            // Call renewable service to create PayPal order
+            PayPalOrderResponse response = renewableStripeService.createPayPalOrder(request);
+            log.info("Renewable PayPal order created successfully. Order ID: {}", response.getOrderId());
+            return ResponseEntity.ok(response);
+            
+        } catch (IllegalArgumentException e) {
+            log.error("Validation error creating Renewable PayPal order: {}", e.getMessage());
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(PayPalOrderResponse.error("validation_failed"));
+        } catch (Exception e) {
+            log.error("Error creating Renewable PayPal order: {}", e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(PayPalOrderResponse.error("paypal_order_creation_failed"));
+        }
+    }
+    
+    private ResponseEntity<PayPalOrderResponse> handlePolymersPayPalOrder(PayPalCreateOrderRequest request) {
+        try {
+            log.info("Creating PayPal order for Polymers with amount: {} {}", request.getAmount(), request.getCurrency());
+            
+            // Validate pricing config if provided
+            if (request.getPricingConfigId() != null) {
+                com.zn.polymers.entity.PolymersPricingConfig pricingConfig = polymersPricingConfigRepository.findById(request.getPricingConfigId())
+                        .orElseThrow(() -> new IllegalArgumentException("Pricing config not found with ID: " + request.getPricingConfigId()));
+                
+                // Use backend pricing
+                request.setAmount(pricingConfig.getTotalPrice());
+                log.info("Using backend total price for PayPal: {} EUR", pricingConfig.getTotalPrice());
+            }
+            
+            // Call polymers service to create PayPal order
+            PayPalOrderResponse response = polymersStripeService.createPayPalOrder(request);
+            log.info("Polymers PayPal order created successfully. Order ID: {}", response.getOrderId());
+            return ResponseEntity.ok(response);
+            
+        } catch (IllegalArgumentException e) {
+            log.error("Validation error creating Polymers PayPal order: {}", e.getMessage());
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(PayPalOrderResponse.error("validation_failed"));
+        } catch (Exception e) {
+            log.error("Error creating Polymers PayPal order: {}", e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(PayPalOrderResponse.error("paypal_order_creation_failed"));
+        }
     }
     
     private ResponseEntity<OpticsPaymentResponseDTO> handleOpticsCheckout(CheckoutRequest request, Long pricingConfigId) {
@@ -1160,4 +1384,5 @@ public class PaymentController {
             log.error("❌ Error processing renewable discount PaymentIntent: {}", e.getMessage(), e);
         }
     }
+
 }

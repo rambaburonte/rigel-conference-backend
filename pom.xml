@@ -60,6 +60,12 @@
 			<version>0.11.5</version>
 		</dependency>
 		
+		<dependency>
+		<groupId>com.paypal.sdk</groupId>
+		<artifactId>paypal-checkout-sdk</artifactId>
+		<version>1.0.5</version>
+		</dependency>
+
 		<!-- Jackson Hibernate6 Module for handling Hibernate proxies -->
 		<dependency>
 			<groupId>com.fasterxml.jackson.datatype</groupId>
@@ -100,7 +106,6 @@
 			<groupId>org.postgresql</groupId>
 			<artifactId>postgresql</artifactId>
 			<scope>runtime</scope>
-			<version>42.5.0</version>
 		</dependency>
 		<dependency>
 			<groupId>org.projectlombok</groupId>

@@ -49,6 +49,11 @@ public class RenewablePaymentRecord {
     @Column(length = 500)
     private String paymentIntentId;
 
+    // Payment provider (STRIPE or PAYPAL)
+    @Column(length = 20)
+    @Builder.Default
+    private String provider = "STRIPE";
+
     @Column(nullable = false)
     private String customerEmail;
 
@@ -154,9 +159,25 @@ public class RenewablePaymentRecord {
                 .customerEmail(customerEmail)
                 .amountTotal(amountTotalEuros)
                 .currency(currency)
+                .provider("STRIPE")
                 .stripeCreatedAt(stripeCreatedAt)
                 .stripeExpiresAt(stripeExpiresAt)
                 .paymentStatus(paymentStatus != null ? paymentStatus : "unpaid") // Default to "unpaid" if null
+                .status(PaymentStatus.PENDING)
+                .build();
+    }
+
+    // Factory method to create PaymentRecord from PayPal response data  
+    public static RenewablePaymentRecord fromPayPalResponse(String orderId, String customerEmail,
+                                                         BigDecimal amountTotalEuros, String currency) {
+        return RenewablePaymentRecord.builder()
+                .sessionId(orderId)
+                .customerEmail(customerEmail)
+                .amountTotal(amountTotalEuros)
+                .currency(currency)
+                .provider("PAYPAL")
+                .stripeCreatedAt(LocalDateTime.now()) // Use current time for PayPal orders
+                .paymentStatus("unpaid")
                 .status(PaymentStatus.PENDING)
                 .build();
     }
@@ -167,6 +188,16 @@ public class RenewablePaymentRecord {
                                                 LocalDateTime stripeCreatedAt, 
                                                 LocalDateTime stripeExpiresAt,
                                                 String paymentStatus) {
+        return fromPricingConfig(sessionId, customerEmail, currency, pricingConfig, 
+                               stripeCreatedAt, stripeExpiresAt, paymentStatus, "STRIPE");
+    }
+    
+    // Factory method to create PaymentRecord with PricingConfig and provider
+    public static RenewablePaymentRecord fromPricingConfig(String sessionId, String customerEmail, 
+                                                String currency, RenewablePricingConfig pricingConfig,
+                                                LocalDateTime stripeCreatedAt, 
+                                                LocalDateTime stripeExpiresAt,
+                                                String paymentStatus, String provider) {
         // Use euro amount directly from pricing config
         BigDecimal amountInEuros = pricingConfig.getTotalPrice();
         
@@ -175,6 +206,7 @@ public class RenewablePaymentRecord {
                 .customerEmail(customerEmail)
                 .amountTotal(amountInEuros)
                 .currency(currency)
+                .provider(provider)
                 .stripeCreatedAt(stripeCreatedAt)
                 .stripeExpiresAt(stripeExpiresAt)
                 .paymentStatus(paymentStatus != null ? paymentStatus : "unpaid") // Default to "unpaid" if null
@@ -272,6 +304,15 @@ public class RenewablePaymentRecord {
     
     public boolean isPaymentFailed() {
         return "failed".equals(paymentStatus);
+    }
+    
+    // Provider convenience methods
+    public boolean isStripePayment() {
+        return "STRIPE".equals(provider);
+    }
+    
+    public boolean isPayPalPayment() {
+        return "PAYPAL".equals(provider);
     }
 
     // Format amount for display (already in euros)

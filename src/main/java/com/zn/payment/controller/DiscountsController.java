@@ -202,7 +202,7 @@ public class DiscountsController {
     }
 
     // handle stripe webhook - ONLY for discount payments
-    @PostMapping("/webhook")
+    @PostMapping("/test/webhook")
     public ResponseEntity<String> handleStripeWebhook(HttpServletRequest request) throws IOException {
         log.info("##############    Received DISCOUNT webhook request  ##################");
         String payload;

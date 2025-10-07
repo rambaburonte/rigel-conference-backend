@@ -142,8 +142,8 @@ public class NursingDiscountsService {
                             .build()
                     )
                     .setMode(SessionCreateParams.Mode.PAYMENT)
-                    .setSuccessUrl(request.getSuccessUrl())
-                    .setCancelUrl(request.getCancelUrl())
+                    .setSuccessUrl(request.getSuccessUrl() + "?session_id={CHECKOUT_SESSION_ID}")
+                    .setCancelUrl(request.getCancelUrl() + "?session_id={CHECKOUT_SESSION_ID}")
                     .setCustomerEmail(request.getCustomerEmail())
                     .putAllMetadata(metadata)
                     .build();
