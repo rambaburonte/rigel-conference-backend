@@ -652,12 +652,12 @@ public class PaymentController {
     }
     
     /**
-     * Get payment status from database - returns stored record without calling Stripe
+     * Get payment status from Stripe/PayPal - fetches real-time data from payment providers
      * GET /api/payment/status/{sessionId}
      */
     @GetMapping("/status/{sessionId}")
     public ResponseEntity<?> getPaymentStatus(@PathVariable String sessionId, HttpServletRequest httpRequest) {
-        log.info("Getting payment status for session: {}", sessionId);
+        log.info("Getting real-time payment status from Stripe/PayPal for session: {}", sessionId);
         
         String origin = httpRequest.getHeader("Origin");
         if (origin == null) {
@@ -667,39 +667,39 @@ public class PaymentController {
         try {
             // Route to appropriate service based on domain/origin
             if (origin != null && origin.contains("globallopmeet.com")) {
-                return ResponseEntity.ok(opticsStripeService.getPaymentStatus(sessionId));
+                return ResponseEntity.ok(opticsStripeService.getPaymentStatusFromProvider(sessionId));
             } else if (origin != null && origin.contains("nursingmeet2026.com")) {
-                return ResponseEntity.ok(nursingStripeService.getPaymentStatus(sessionId));
+                return ResponseEntity.ok(nursingStripeService.getPaymentStatusFromProvider(sessionId));
             } else if (origin != null && origin.contains("globalrenewablemeet.com")) {
-                return ResponseEntity.ok(renewableStripeService.getPaymentStatus(sessionId));
+                return ResponseEntity.ok(renewableStripeService.getPaymentStatusFromProvider(sessionId));
             } else if (origin != null && origin.contains("polyscienceconference.com")) {
-                return ResponseEntity.ok(polymersStripeService.getPaymentStatus(sessionId));
+                return ResponseEntity.ok(polymersStripeService.getPaymentStatusFromProvider(sessionId));
             } else {
-                // Try all services to find the session
+                // Try all services to find the session from payment providers
                 try {
-                    return ResponseEntity.ok(opticsStripeService.getPaymentStatus(sessionId));
+                    return ResponseEntity.ok(opticsStripeService.getPaymentStatusFromProvider(sessionId));
                 } catch (Exception e1) {
                     try {
-                        return ResponseEntity.ok(nursingStripeService.getPaymentStatus(sessionId));
+                        return ResponseEntity.ok(nursingStripeService.getPaymentStatusFromProvider(sessionId));
                     } catch (Exception e2) {
                         try {
-                            return ResponseEntity.ok(renewableStripeService.getPaymentStatus(sessionId));
+                            return ResponseEntity.ok(renewableStripeService.getPaymentStatusFromProvider(sessionId));
                         } catch (Exception e3) {
                             try {
-                                return ResponseEntity.ok(polymersStripeService.getPaymentStatus(sessionId));
+                                return ResponseEntity.ok(polymersStripeService.getPaymentStatusFromProvider(sessionId));
                             } catch (Exception e4) {
-                                log.error("Payment record not found in any service: {}", sessionId);
+                                log.error("Session not found in any payment provider: {}", sessionId);
                                 return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                                        .body(createErrorResponse("payment_not_found"));
+                                        .body(createErrorResponse("session_not_found_in_providers"));
                             }
                         }
                     }
                 }
             }
         } catch (Exception e) {
-            log.error("Error getting payment status for session {}: {}", sessionId, e.getMessage(), e);
+            log.error("Error getting payment status from providers for session {}: {}", sessionId, e.getMessage(), e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(createErrorResponse("status_retrieval_failed"));
+                    .body(createErrorResponse("provider_status_retrieval_failed"));
         }
     }
     

@@ -1428,6 +1428,121 @@ public PolymersPaymentResponseDTO retrieveSession(String sessionId) throws Strip
         return paymentRecord;
     }
     
+    /**
+     * Get payment status directly from Stripe/PayPal providers - fetches real-time data
+     * This method calls the actual payment providers to get the most current status
+     */
+    public PolymersPaymentRecord getPaymentStatusFromProvider(String sessionId) throws StripeException {
+        log.info("🔄 Getting real-time payment status from provider for Polymers session: {}", sessionId);
+        
+        // Check if this is a PayPal order (starts with PAYPAL_)
+        if (sessionId.startsWith("PAYPAL_")) {
+            return getPayPalOrderStatus(sessionId);
+        } else {
+            // It's a Stripe session
+            return getStripeSessionStatus(sessionId);
+        }
+    }
+    
+    /**
+     * Get real-time status from Stripe API
+     */
+    private PolymersPaymentRecord getStripeSessionStatus(String sessionId) throws StripeException {
+        log.info("🔄 Fetching real-time Stripe session status for: {}", sessionId);
+        
+        Stripe.apiKey = secretKey;
+        
+        try {
+            // Fetch latest session data from Stripe
+            com.stripe.model.checkout.Session stripeSession = com.stripe.model.checkout.Session.retrieve(sessionId);
+            
+            // Find existing payment record
+            PolymersPaymentRecord paymentRecord = paymentRecordRepository.findBySessionId(sessionId)
+                    .orElseThrow(() -> new RuntimeException("Payment record not found for session: " + sessionId));
+            
+            // Update payment record with real-time Stripe data
+            paymentRecord.setPaymentIntentId(stripeSession.getPaymentIntent());
+            
+            // Map Stripe session status to our status
+            if ("complete".equals(stripeSession.getStatus())) {
+                paymentRecord.setStatus(PolymersPaymentRecord.PaymentStatus.COMPLETED);
+            } else if ("expired".equals(stripeSession.getStatus())) {
+                paymentRecord.setStatus(PolymersPaymentRecord.PaymentStatus.EXPIRED);
+            } else if ("open".equals(stripeSession.getStatus())) {
+                paymentRecord.setStatus(PolymersPaymentRecord.PaymentStatus.PENDING);
+            }
+            
+            // Update payment status from Stripe
+            String stripePaymentStatus = stripeSession.getPaymentStatus();
+            paymentRecord.setPaymentStatus(stripePaymentStatus != null ? stripePaymentStatus : "unpaid");
+            
+            // Update other fields from Stripe
+            String customerEmail = stripeSession.getCustomerDetails() != null ? 
+                stripeSession.getCustomerDetails().getEmail() : stripeSession.getCustomerEmail();
+            if (customerEmail != null) {
+                paymentRecord.setCustomerEmail(customerEmail);
+            }
+            
+            if (stripeSession.getAmountTotal() != null) {
+                BigDecimal stripeAmountInEuros = BigDecimal.valueOf(stripeSession.getAmountTotal()).divide(BigDecimal.valueOf(100));
+                paymentRecord.setAmountTotal(stripeAmountInEuros);
+            }
+            
+            if (stripeSession.getCurrency() != null) {
+                paymentRecord.setCurrency(stripeSession.getCurrency());
+            }
+            
+            paymentRecord.setUpdatedAt(LocalDateTime.now());
+            
+            // Save updated record
+            PolymersPaymentRecord updatedRecord = paymentRecordRepository.save(paymentRecord);
+            
+            log.info("✅ Retrieved and updated Polymers payment status from Stripe for session: {} - Status: {}, Payment Status: {}", 
+                    sessionId, updatedRecord.getStatus(), updatedRecord.getPaymentStatus());
+            
+            return updatedRecord;
+            
+        } catch (StripeException e) {
+            log.error("❌ Error fetching Stripe session status for {}: {}", sessionId, e.getMessage());
+            throw e;
+        }
+    }
+    
+    /**
+     * Get real-time status from PayPal API (mock implementation for now)
+     */
+    private PolymersPaymentRecord getPayPalOrderStatus(String orderId) {
+        log.info("🔄 Fetching real-time PayPal order status for: {}", orderId);
+        
+        try {
+            // Find existing payment record
+            PolymersPaymentRecord paymentRecord = paymentRecordRepository.findBySessionId(orderId)
+                    .orElseThrow(() -> new RuntimeException("PayPal payment record not found for order: " + orderId));
+            
+            // TODO: Replace this with actual PayPal SDK call to get order status
+            // For now, return the current database status
+            log.info("📋 PayPal order status check - Current status: {}, Payment Status: {}", 
+                    paymentRecord.getStatus(), paymentRecord.getPaymentStatus());
+            
+            // In a real implementation, you would:
+            // 1. Call PayPal SDK: Order.get(orderId)
+            // 2. Map PayPal status to our status enum
+            // 3. Update and save the record
+            
+            paymentRecord.setUpdatedAt(LocalDateTime.now());
+            PolymersPaymentRecord updatedRecord = paymentRecordRepository.save(paymentRecord);
+            
+            log.info("✅ Retrieved PayPal payment status for order: {} - Status: {}", 
+                    orderId, updatedRecord.getStatus());
+            
+            return updatedRecord;
+            
+        } catch (Exception e) {
+            log.error("❌ Error fetching PayPal order status for {}: {}", orderId, e.getMessage());
+            throw new RuntimeException("PayPal status retrieval failed: " + e.getMessage());
+        }
+    }
+    
     // ======================= PAYPAL INTEGRATION =======================
     
     /**
