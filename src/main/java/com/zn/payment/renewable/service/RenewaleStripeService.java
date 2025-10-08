@@ -105,11 +105,61 @@ public class RenewaleStripeService {
     /**
      * Auto-sync discount table when payment record is updated
      * This implements the constraint that discount table should be updated whenever payment record changes
+    /**
+     * Check if a payment record represents a discount payment
+     * Based on metadata patterns used in discount payments
+     */
+    private boolean isDiscountPayment(RenewablePaymentRecord paymentRecord) {
+        if (paymentRecord == null) {
+            return false;
+        }
+        
+        try {
+            // Get the Stripe session to check metadata
+            if (paymentRecord.getSessionId() != null) {
+                Stripe.apiKey = secretKey;
+                Session stripeSession = Session.retrieve(paymentRecord.getSessionId());
+                
+                if (stripeSession != null && stripeSession.getMetadata() != null) {
+                    Map<String, String> metadata = stripeSession.getMetadata();
+                    
+                    // Check for discount metadata indicators
+                    String source = metadata.get("source");
+                    String paymentType = metadata.get("paymentType");
+                    String productName = metadata.get("productName");
+                    
+                    boolean isDiscount = (source != null && source.equals("discount-api")) ||
+                                       (paymentType != null && paymentType.equals("discount-registration")) ||
+                                       (productName != null && productName.toLowerCase().contains("discount"));
+                    
+                    log.debug("🔍 Discount check for session {}: source={}, paymentType={}, productName={}, isDiscount={}", 
+                             paymentRecord.getSessionId(), source, paymentType, productName, isDiscount);
+                    
+                    return isDiscount;
+                }
+            }
+        } catch (Exception e) {
+            log.warn("⚠️ Failed to check discount metadata for session {}: {}", paymentRecord.getSessionId(), e.getMessage());
+        }
+        
+        return false;
+    }
+    
+     /*
+     * Auto-sync discount table when payment record is updated
+     * This implements the constraint that discount table should be updated whenever payment record changes
      * Now uses database sync function for better consistency
+     * IMPORTANT: Only syncs if the payment is actually a discount payment (has discount metadata)
      */
     private void autoSyncDiscountOnPaymentUpdate(RenewablePaymentRecord paymentRecord) {
         if (paymentRecord == null || paymentRecord.getSessionId() == null) {
             log.warn("⚠️ Cannot auto-sync discount: payment record or session ID is null");
+            return;
+        }
+        
+        // Check if this is actually a discount payment before syncing
+        if (!isDiscountPayment(paymentRecord)) {
+            log.info("🚫 Skipping discount sync for session: {} - not a discount payment", paymentRecord.getSessionId());
             return;
         }
         
