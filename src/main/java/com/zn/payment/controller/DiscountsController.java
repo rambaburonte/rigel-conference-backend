@@ -96,53 +96,70 @@ public class DiscountsController {
      * Routes to appropriate discount service based on Origin/Referer headers
      */
     @PostMapping("/update")
-    public ResponseEntity<?> updateDiscountPaymentStatus(@RequestBody java.util.Map<String, String> request, HttpServletRequest httpRequest) {
-        String sessionId = request.get("sessionId");
-        if (sessionId == null || sessionId.trim().isEmpty()) {
-            return ResponseEntity.badRequest().body("sessionId is required");
-        }
+    public ResponseEntity<?> updateDiscountPaymentStatus(@RequestParam String sessionId, HttpServletRequest httpRequest) {
+        log.info("🔄 Updating discount payment status for session: {}", sessionId);
         
         String origin = httpRequest.getHeader("Origin");
-        String referer = httpRequest.getHeader("Referer");
-        
-        log.info("🔄 Updating discount payment status for session: {} from origin: {}, referer: {}", sessionId, origin, referer);
+        if (origin == null) {
+            origin = httpRequest.getHeader("Referer");
+        }
         
         try {
             // Route based on domain
-            if ((origin != null && origin.contains("globallopmeet.com")) || 
-                (referer != null && referer.contains("globallopmeet.com"))) {
+            if (origin != null && origin.contains("globallopmeet.com")) {
                 // Route to Optics discount service
                 log.info("🎯 Routing to OpticsDiscountsService for session: {}", sessionId);
                 boolean updated = opticsDiscountsService.updatePaymentStatusBySessionId(sessionId, "paid");
                 return ResponseEntity.ok(java.util.Map.of("updated", updated, "sessionId", sessionId, "service", "optics"));
-            } else if ((origin != null && origin.contains("polyscienceconference.com")) || 
-                       (referer != null && referer.contains("polyscienceconference.com"))) {
+            } else if (origin != null && origin.contains("polyscienceconference.com")) {
                 // Route to Polymers discount service
                 log.info("🎯 Routing to PolymersDiscountsService for session: {}", sessionId);
                 boolean updated = polymersDiscountsService.updatePaymentStatusBySessionId(sessionId, "paid");
                 return ResponseEntity.ok(java.util.Map.of("updated", updated, "sessionId", sessionId, "service", "polymers"));
-            } else if ((origin != null && origin.contains("nursingmeet2026.com")) || 
-                       (referer != null && referer.contains("nursingmeet2026.com"))) {
+            } else if (origin != null && origin.contains("nursingmeet2026.com")) {
                 // Route to Nursing discount service
                 log.info("🎯 Routing to NursingDiscountsService for session: {}", sessionId);
                 boolean updated = nursingDiscountsService.updatePaymentStatusBySessionId(sessionId, "paid");
                 return ResponseEntity.ok(java.util.Map.of("updated", updated, "sessionId", sessionId, "service", "nursing"));
-            } else if ((origin != null && origin.contains("globalrenewablemeet.com")) || 
-                       (referer != null && referer.contains("globalrenewablemeet.com"))) {
+            } else if (origin != null && origin.contains("globalrenewablemeet.com")) {
                 // Route to Renewable discount service
                 log.info("🎯 Routing to RenewableDiscountsService for session: {}", sessionId);
                 boolean updated = renewableDiscountsService.updatePaymentStatusBySessionId(sessionId, "paid");
                 return ResponseEntity.ok(java.util.Map.of("updated", updated, "sessionId", sessionId, "service", "renewable"));
             } else {
-                // Default to nursing discount service for backward compatibility
-                log.info("🎯 Routing to NursingDiscountsService (default) for session: {}", sessionId);
-                boolean updated = nursingDiscountsService.updatePaymentStatusBySessionId(sessionId, "paid");
-                return ResponseEntity.ok(java.util.Map.of("updated", updated, "sessionId", sessionId, "service", "nursing-default"));
+                // Try all services to find the session
+                try {
+                    log.info("🎯 Trying OpticsDiscountsService for session: {}", sessionId);
+                    boolean updated = opticsDiscountsService.updatePaymentStatusBySessionId(sessionId, "paid");
+                    return ResponseEntity.ok(java.util.Map.of("updated", updated, "sessionId", sessionId, "service", "optics"));
+                } catch (Exception e1) {
+                    try {
+                        log.info("🎯 Trying NursingDiscountsService for session: {}", sessionId);
+                        boolean updated = nursingDiscountsService.updatePaymentStatusBySessionId(sessionId, "paid");
+                        return ResponseEntity.ok(java.util.Map.of("updated", updated, "sessionId", sessionId, "service", "nursing"));
+                    } catch (Exception e2) {
+                        try {
+                            log.info("🎯 Trying RenewableDiscountsService for session: {}", sessionId);
+                            boolean updated = renewableDiscountsService.updatePaymentStatusBySessionId(sessionId, "paid");
+                            return ResponseEntity.ok(java.util.Map.of("updated", updated, "sessionId", sessionId, "service", "renewable"));
+                        } catch (Exception e3) {
+                            try {
+                                log.info("🎯 Trying PolymersDiscountsService for session: {}", sessionId);
+                                boolean updated = polymersDiscountsService.updatePaymentStatusBySessionId(sessionId, "paid");
+                                return ResponseEntity.ok(java.util.Map.of("updated", updated, "sessionId", sessionId, "service", "polymers"));
+                            } catch (Exception e4) {
+                                log.error("❌ Session not found in any discount service: {}", sessionId);
+                                return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                                        .body(java.util.Map.of("error", "session_not_found", "sessionId", sessionId));
+                            }
+                        }
+                    }
+                }
             }
         } catch (Exception e) {
             log.error("❌ Error updating discount payment status for session {}: {}", sessionId, e.getMessage(), e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body("Error updating discount payment status: " + e.getMessage());
+                    .body(java.util.Map.of("error", "update_failed", "message", e.getMessage()));
         }
     }
     
