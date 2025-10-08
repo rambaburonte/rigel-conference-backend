@@ -33,8 +33,6 @@ import com.zn.payment.optics.entity.OpticsDiscounts;
 import com.zn.payment.optics.entity.OpticsPaymentRecord;
 import com.zn.payment.optics.repository.OpticsDiscountsRepository;
 import com.zn.payment.optics.repository.OpticsPaymentRecordRepository;
-// import optional class
-
 
 import lombok.extern.slf4j.Slf4j;
 
@@ -437,8 +435,8 @@ public class OpticsStripeService {
         // Build Stripe SessionCreateParams - enforcing EUR currency
         SessionCreateParams params = SessionCreateParams.builder()
             .setMode(SessionCreateParams.Mode.PAYMENT)
-            .setSuccessUrl(request.getSuccessUrl())
-            .setCancelUrl(request.getCancelUrl())
+            .setSuccessUrl(request.getSuccessUrl() + "?session_id={CHECKOUT_SESSION_ID}")
+            .setCancelUrl(request.getCancelUrl() + "?session_id={CHECKOUT_SESSION_ID}")
             .addPaymentMethodType(SessionCreateParams.PaymentMethodType.CARD)
             .setExpiresAt(expirationTime.toEpochSecond())
             .putAllMetadata(metadata)
