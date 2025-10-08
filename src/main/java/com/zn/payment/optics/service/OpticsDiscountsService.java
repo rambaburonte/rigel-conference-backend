@@ -419,6 +419,32 @@ public class OpticsDiscountsService {
         }
     }
     /**
+     * Maps payment provider status to internal PaymentStatus enum
+     */
+    private com.zn.payment.optics.entity.OpticsPaymentRecord.PaymentStatus mapStatusToEnum(String status) {
+        if (status == null) {
+            return com.zn.payment.optics.entity.OpticsPaymentRecord.PaymentStatus.PENDING;
+        }
+        
+        return switch (status.toLowerCase()) {
+            case "paid", "complete", "completed", "success", "succeeded" -> 
+                com.zn.payment.optics.entity.OpticsPaymentRecord.PaymentStatus.COMPLETED;
+            case "failed", "fail", "error" -> 
+                com.zn.payment.optics.entity.OpticsPaymentRecord.PaymentStatus.FAILED;
+            case "cancelled", "canceled", "cancel" -> 
+                com.zn.payment.optics.entity.OpticsPaymentRecord.PaymentStatus.CANCELLED;
+            case "expired", "expire" -> 
+                com.zn.payment.optics.entity.OpticsPaymentRecord.PaymentStatus.EXPIRED;
+            case "pending", "processing", "incomplete" -> 
+                com.zn.payment.optics.entity.OpticsPaymentRecord.PaymentStatus.PENDING;
+            default -> {
+                log.warn("[OpticsDiscountsService] Unknown status '{}', defaulting to PENDING", status);
+                yield com.zn.payment.optics.entity.OpticsPaymentRecord.PaymentStatus.PENDING;
+            }
+        };
+    }
+
+    /**
      * Update payment status in OpticsDiscounts by Stripe session ID
      */
     public boolean updatePaymentStatusBySessionId(String sessionId, String status) {
@@ -428,12 +454,12 @@ public class OpticsDiscountsService {
             log.info("[OpticsDiscountsService][WEBHOOK] Found discount for sessionId: {}", sessionId);
             log.info("[OpticsDiscountsService][WEBHOOK] Previous paymentStatus: {}, Previous status(enum): {}", discount.getPaymentStatus(), discount.getStatus());
             discount.setPaymentStatus(status);
-            try {
-                discount.setStatus(com.zn.payment.optics.entity.OpticsPaymentRecord.PaymentStatus.valueOf(status.toUpperCase()));
-            } catch (Exception e) {
-                log.warn("[OpticsDiscountsService][WEBHOOK] Invalid status for enum: {}, defaulting to PENDING", status);
-                discount.setStatus(com.zn.payment.optics.entity.OpticsPaymentRecord.PaymentStatus.PENDING);
-            }
+            
+            // Map the payment status to enum using proper mapping logic
+            com.zn.payment.optics.entity.OpticsPaymentRecord.PaymentStatus enumStatus = mapStatusToEnum(status);
+            discount.setStatus(enumStatus);
+            log.info("[OpticsDiscountsService][WEBHOOK] Mapped status '{}' to enum: {}", status, enumStatus);
+            
             discount.setUpdatedAt(java.time.LocalDateTime.now());
             discountsRepository.save(discount);
             log.info("[OpticsDiscountsService][WEBHOOK] Discount updated and saved for sessionId: {}. New paymentStatus: {}, New status(enum): {}", sessionId, discount.getPaymentStatus(), discount.getStatus());
@@ -460,12 +486,12 @@ public class OpticsDiscountsService {
             log.info("[OpticsDiscountsService][WEBHOOK] Found discount for paymentIntentId: {}", paymentIntentId);
             log.info("[OpticsDiscountsService][WEBHOOK] Previous paymentStatus: {}, Previous status(enum): {}", discount.getPaymentStatus(), discount.getStatus());
             discount.setPaymentStatus(status);
-            try {
-                discount.setStatus(com.zn.payment.optics.entity.OpticsPaymentRecord.PaymentStatus.valueOf(status.toUpperCase()));
-            } catch (Exception e) {
-                log.warn("[OpticsDiscountsService][WEBHOOK] Invalid status for enum: {}, defaulting to PENDING", status);
-                discount.setStatus(com.zn.payment.optics.entity.OpticsPaymentRecord.PaymentStatus.PENDING);
-            }
+            
+            // Map the payment status to enum using proper mapping logic
+            com.zn.payment.optics.entity.OpticsPaymentRecord.PaymentStatus enumStatus = mapStatusToEnum(status);
+            discount.setStatus(enumStatus);
+            log.info("[OpticsDiscountsService][WEBHOOK] Mapped status '{}' to enum: {}", status, enumStatus);
+            
             discount.setUpdatedAt(java.time.LocalDateTime.now());
             discountsRepository.save(discount);
             log.info("[OpticsDiscountsService][WEBHOOK] Discount updated and saved for paymentIntentId: {}. New paymentStatus: {}, New status(enum): {}", paymentIntentId, discount.getPaymentStatus(), discount.getStatus());
