@@ -61,10 +61,11 @@
 		</dependency>
 		
 		<dependency>
-		<groupId>com.paypal.sdk</groupId>
-		<artifactId>paypal-checkout-sdk</artifactId>
-		<version>1.0.5</version>
-		</dependency>
+    <groupId>com.paypal.sdk</groupId>
+    <artifactId>checkout-sdk</artifactId>
+    <version>1.0.4</version>
+</dependency>
+
 
 		<!-- Jackson Hibernate6 Module for handling Hibernate proxies -->
 		<dependency>
