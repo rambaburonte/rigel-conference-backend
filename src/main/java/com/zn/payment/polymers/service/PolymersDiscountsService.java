@@ -638,4 +638,105 @@ public class PolymersDiscountsService {
             log.error("❌ [PolymersDiscountsService][WEBHOOK] Error in manual payment intent data extraction: {}", e.getMessage(), e);
         }
     }
+
+    /**
+     * Get payment status directly from Stripe/PayPal providers - fetches real-time data
+     * This method calls the actual payment providers to get the most current status
+     */
+    public PolymersDiscounts getPaymentStatusFromProvider(String sessionId) throws StripeException {
+        log.info("🔄 Getting real-time payment status from provider for Polymers discount session: {}", sessionId);
+        
+        // Check if this is a PayPal order (starts with PAYPAL_)
+        if (sessionId.startsWith("PAYPAL_")) {
+            return getPayPalDiscountOrderStatus(sessionId);
+        } else {
+            // It's a Stripe session
+            return getStripeDiscountSessionStatus(sessionId);
+        }
+    }
+
+    /**
+     * Get real-time status from Stripe API for discount sessions
+     */
+    private PolymersDiscounts getStripeDiscountSessionStatus(String sessionId) throws StripeException {
+        log.info("🔄 Fetching real-time Stripe discount session status for: {}", sessionId);
+        
+        Stripe.apiKey = secretKey;
+        
+        try {
+            // Fetch latest session data from Stripe
+            com.stripe.model.checkout.Session stripeSession = com.stripe.model.checkout.Session.retrieve(sessionId);
+            
+            // Find existing discount record
+            PolymersDiscounts discountRecord = discountsRepository.findBySessionId(sessionId);
+            if (discountRecord == null) {
+                throw new RuntimeException("Discount record not found for session: " + sessionId);
+            }
+            
+            // Update discount record with real-time Stripe data
+            discountRecord.setPaymentIntentId(stripeSession.getPaymentIntent());
+            
+            // Map Stripe session status to our status
+            if ("complete".equals(stripeSession.getStatus())) {
+                discountRecord.setStatus(com.zn.payment.polymers.entity.PolymersPaymentRecord.PaymentStatus.COMPLETED);
+            } else if ("expired".equals(stripeSession.getStatus())) {
+                discountRecord.setStatus(com.zn.payment.polymers.entity.PolymersPaymentRecord.PaymentStatus.EXPIRED);
+            } else if ("open".equals(stripeSession.getStatus())) {
+                discountRecord.setStatus(com.zn.payment.polymers.entity.PolymersPaymentRecord.PaymentStatus.PENDING);
+            }
+            
+            // Update payment status from Stripe
+            String stripePaymentStatus = stripeSession.getPaymentStatus();
+            discountRecord.setPaymentStatus(stripePaymentStatus != null ? stripePaymentStatus : "unpaid");
+            
+            // Update other fields from Stripe
+            String customerEmail = stripeSession.getCustomerDetails() != null ? 
+                stripeSession.getCustomerDetails().getEmail() : stripeSession.getCustomerEmail();
+            if (customerEmail != null) {
+                discountRecord.setCustomerEmail(customerEmail);
+            }
+            
+            if (stripeSession.getAmountTotal() != null) {
+                BigDecimal stripeAmountInEuros = BigDecimal.valueOf(stripeSession.getAmountTotal()).divide(BigDecimal.valueOf(100));
+                discountRecord.setAmountTotal(stripeAmountInEuros);
+            }
+            
+            if (stripeSession.getCurrency() != null) {
+                discountRecord.setCurrency(stripeSession.getCurrency());
+            }
+            
+            discountRecord.setUpdatedAt(java.time.LocalDateTime.now());
+            
+            // Save updated record
+            PolymersDiscounts updatedRecord = discountsRepository.save(discountRecord);
+            
+            log.info("✅ Retrieved and updated Polymers discount status from Stripe for session: {} - Status: {}, Payment Status: {}", 
+                    sessionId, updatedRecord.getStatus(), updatedRecord.getPaymentStatus());
+            
+            return updatedRecord;
+            
+        } catch (StripeException e) {
+            log.error("❌ Error fetching Stripe discount session status for {}: {}", sessionId, e.getMessage());
+            throw e;
+        }
+    }
+    
+    /**
+     * Get real-time status from PayPal API for discount orders (mock implementation for now)
+     */
+    private PolymersDiscounts getPayPalDiscountOrderStatus(String orderId) {
+        log.info("🔄 Fetching PayPal discount order status for: {}", orderId);
+        
+        // TODO: Implement actual PayPal API integration for discount orders
+        // For now, return existing record from database
+        String actualSessionId = orderId.replace("PAYPAL_", "");
+        PolymersDiscounts discountRecord = discountsRepository.findBySessionId(actualSessionId);
+        
+        if (discountRecord == null) {
+            throw new RuntimeException("Discount record not found for PayPal order: " + orderId);
+        }
+        
+        log.info("📋 PayPal discount order status (from database): {} - Status: {}", orderId, discountRecord.getStatus());
+        return discountRecord;
+    }
 }
