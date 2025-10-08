@@ -1,5 +1,15 @@
 package com.zn.payment.renewable.service;
 
+import java.io.IOException;
+import java.math.BigDecimal;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.stream.Collectors;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Service;
+
 import com.google.gson.JsonSyntaxException;
 import com.stripe.Stripe;
 import com.stripe.exception.SignatureVerificationException;
@@ -12,16 +22,9 @@ import com.zn.payment.dto.CreateDiscountSessionRequest;
 import com.zn.payment.renewable.entity.RenewableDiscounts;
 import com.zn.payment.renewable.entity.RenewablePaymentRecord;
 import com.zn.payment.renewable.repository.RenewableDiscountsRepository;
+
 import jakarta.servlet.http.HttpServletRequest;
-import java.io.IOException;
-import java.math.BigDecimal;
-import java.util.HashMap;
-import java.util.Map;
-import java.util.stream.Collectors;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.stereotype.Service;
 
 
 @Service
@@ -102,8 +105,8 @@ public class RenewableDiscountsService {
                             .build()
                     )
                     .setMode(SessionCreateParams.Mode.PAYMENT)
-                    .setSuccessUrl(request.getSuccessUrl() + "?session_id={CHECKOUT_SESSION_ID}")
-                    .setCancelUrl(request.getCancelUrl() + "?session_id={CHECKOUT_SESSION_ID}")
+                    .setSuccessUrl(request.getSuccessUrl() + "?session_id={CHECKOUT_SESSION_ID}&type=discount")
+                    .setCancelUrl(request.getCancelUrl() + "?session_id={CHECKOUT_SESSION_ID}&type=discount")
                     .setCustomerEmail(request.getCustomerEmail())
                     .putAllMetadata(metadata)
                     .build();

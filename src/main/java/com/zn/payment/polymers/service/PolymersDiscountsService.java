@@ -20,7 +20,6 @@ import com.stripe.net.Webhook;
 import com.stripe.param.checkout.SessionCreateParams;
 import com.zn.payment.dto.CreateDiscountSessionRequest;
 import com.zn.payment.polymers.entity.PolymersDiscounts;
-// ...existing code...
 import com.zn.payment.polymers.entity.PolymersPaymentRecord.PaymentStatus;
 import com.zn.payment.polymers.repository.PolymersDiscountsRepository;
 
@@ -186,8 +185,8 @@ public class PolymersDiscountsService {
                             .build()
                     )
                     .setMode(SessionCreateParams.Mode.PAYMENT)
-                    .setSuccessUrl(request.getSuccessUrl() + "?session_id={CHECKOUT_SESSION_ID}")
-                    .setCancelUrl(request.getCancelUrl() + "?session_id={CHECKOUT_SESSION_ID}")
+                    .setSuccessUrl(request.getSuccessUrl() + "?session_id={CHECKOUT_SESSION_ID}&type=discount")
+                    .setCancelUrl(request.getCancelUrl() + "?session_id={CHECKOUT_SESSION_ID}&type=discount")
                     .setCustomerEmail(request.getCustomerEmail())
                     .putAllMetadata(metadata)
                     .build();
