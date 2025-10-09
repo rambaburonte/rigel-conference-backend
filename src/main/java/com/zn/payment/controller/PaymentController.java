@@ -712,12 +712,185 @@ public class PaymentController {
         );
     }
     
-    // ======================= PAYPAL INTEGRATION =======================
+    /**
+     * Handle PayPal return URL - called when user approves payment and PayPal redirects back
+     * GET /api/payment/paypal/return?token=ORDER_ID&PayerID=PAYER_ID
+     */
+    @GetMapping("/paypal/return")
+    public ResponseEntity<?> handlePayPalReturn(@RequestParam String token, 
+                                              @RequestParam(required = false) String PayerID,
+                                              HttpServletRequest httpRequest) {
+        log.info("Handling PayPal return for token: {} and PayerID: {}", token, PayerID);
+        
+        String origin = httpRequest.getHeader("Origin");
+        if (origin == null) {
+            origin = httpRequest.getHeader("Referer");
+        }
+        
+        try {
+            // Route to appropriate service based on domain
+            if (origin != null && origin.contains("globallopmeet.com")) {
+                return handleOpticsPayPalReturn(token, PayerID);
+            } else if (origin != null && origin.contains("nursingmeet2026.com")) {
+                return handleNursingPayPalReturn(token, PayerID);
+            } else if (origin != null && origin.contains("globalrenewablemeet.com")) {
+                return handleRenewablePayPalReturn(token, PayerID);
+            } else if (origin != null && origin.contains("polymersmeet.com")) {
+                return handlePolymersPayPalReturn(token, PayerID);
+            } else {
+                log.warn("Unknown origin for PayPal return: {}, defaulting to Nursing", origin);
+                return handleNursingPayPalReturn(token, PayerID);
+            }
+        } catch (Exception e) {
+            log.error("Error handling PayPal return for token {}: {}", token, e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(PayPalOrderResponse.error("paypal_return_handling_failed"));
+        }
+    }
+    
+    // === PAYPAL RETURN HANDLERS ===
+    
+    private ResponseEntity<PayPalOrderResponse> handleOpticsPayPalReturn(String token, String payerId) {
+        try {
+            PayPalOrderResponse response = opticsStripeService.handlePayPalReturn(token, payerId);
+            if (response.isSuccess()) {
+                return ResponseEntity.ok(response);
+            } else {
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(response);
+            }
+        } catch (Exception e) {
+            log.error("Error handling Optics PayPal return: {}", e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(PayPalOrderResponse.error("optics_paypal_return_failed"));
+        }
+    }
+    
+    private ResponseEntity<PayPalOrderResponse> handleNursingPayPalReturn(String token, String payerId) {
+        try {
+            PayPalOrderResponse response = nursingStripeService.handlePayPalReturn(token, payerId);
+            if (response.isSuccess()) {
+                return ResponseEntity.ok(response);
+            } else {
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(response);
+            }
+        } catch (Exception e) {
+            log.error("Error handling Nursing PayPal return: {}", e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(PayPalOrderResponse.error("nursing_paypal_return_failed"));
+        }
+    }
+    
+    private ResponseEntity<PayPalOrderResponse> handleRenewablePayPalReturn(String token, String payerId) {
+        try {
+            PayPalOrderResponse response = renewableStripeService.handlePayPalReturn(token, payerId);
+            if (response.isSuccess()) {
+                return ResponseEntity.ok(response);
+            } else {
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(response);
+            }
+        } catch (Exception e) {
+            log.error("Error handling Renewable PayPal return: {}", e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(PayPalOrderResponse.error("renewable_paypal_return_failed"));
+        }
+    }
+    
+    private ResponseEntity<PayPalOrderResponse> handlePolymersPayPalReturn(String token, String payerId) {
+        try {
+            PayPalOrderResponse response = polymersStripeService.handlePayPalReturn(token, payerId);
+            if (response.isSuccess()) {
+                return ResponseEntity.ok(response);
+            } else {
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(response);
+            }
+        } catch (Exception e) {
+            log.error("Error handling Polymers PayPal return: {}", e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(PayPalOrderResponse.error("polymers_paypal_return_failed"));
+        }
+    }
     
     /**
-     * Create PayPal order with domain-based routing
-     * POST /api/payment/paypal/create
+     * Handle PayPal cancel URL - called when user cancels payment and PayPal redirects back
+     * GET /api/payment/paypal/cancel?token=ORDER_ID
      */
+    @GetMapping("/paypal/cancel")
+    public ResponseEntity<?> handlePayPalCancel(@RequestParam String token, 
+                                              HttpServletRequest httpRequest) {
+        log.info("Handling PayPal cancel for token: {}", token);
+        
+        String origin = httpRequest.getHeader("Origin");
+        if (origin == null) {
+            origin = httpRequest.getHeader("Referer");
+        }
+        
+        try {
+            // Route to appropriate service based on domain
+            if (origin != null && origin.contains("globallopmeet.com")) {
+                return handleOpticsPayPalCancel(token);
+            } else if (origin != null && origin.contains("nursingmeet2026.com")) {
+                return handleNursingPayPalCancel(token);
+            } else if (origin != null && origin.contains("globalrenewablemeet.com")) {
+                return handleRenewablePayPalCancel(token);
+            } else if (origin != null && origin.contains("polymersmeet.com")) {
+                return handlePolymersPayPalCancel(token);
+            } else {
+                log.warn("Unknown origin for PayPal cancel: {}, defaulting to Nursing", origin);
+                return handleNursingPayPalCancel(token);
+            }
+        } catch (Exception e) {
+            log.error("Error handling PayPal cancel for token {}: {}", token, e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(PayPalOrderResponse.error("paypal_cancel_handling_failed"));
+        }
+    }
+    
+    // === PAYPAL CANCEL HANDLERS ===
+    
+    private ResponseEntity<PayPalOrderResponse> handleOpticsPayPalCancel(String token) {
+        try {
+            log.info("Handling Optics PayPal cancel for token: {}", token);
+            return ResponseEntity.ok(PayPalOrderResponse.error("payment_cancelled_by_user"));
+        } catch (Exception e) {
+            log.error("Error handling Optics PayPal cancel: {}", e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(PayPalOrderResponse.error("optics_paypal_cancel_failed"));
+        }
+    }
+    
+    private ResponseEntity<PayPalOrderResponse> handleNursingPayPalCancel(String token) {
+        try {
+            log.info("Handling Nursing PayPal cancel for token: {}", token);
+            return ResponseEntity.ok(PayPalOrderResponse.error("payment_cancelled_by_user"));
+        } catch (Exception e) {
+            log.error("Error handling Nursing PayPal cancel: {}", e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(PayPalOrderResponse.error("nursing_paypal_cancel_failed"));
+        }
+    }
+    
+    private ResponseEntity<PayPalOrderResponse> handleRenewablePayPalCancel(String token) {
+        try {
+            log.info("Handling Renewable PayPal cancel for token: {}", token);
+            return ResponseEntity.ok(PayPalOrderResponse.error("payment_cancelled_by_user"));
+        } catch (Exception e) {
+            log.error("Error handling Renewable PayPal cancel: {}", e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(PayPalOrderResponse.error("renewable_paypal_cancel_failed"));
+        }
+    }
+    
+    private ResponseEntity<PayPalOrderResponse> handlePolymersPayPalCancel(String token) {
+        try {
+            log.info("Handling Polymers PayPal cancel for token: {}", token);
+            return ResponseEntity.ok(PayPalOrderResponse.error("payment_cancelled_by_user"));
+        } catch (Exception e) {
+            log.error("Error handling Polymers PayPal cancel: {}", e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(PayPalOrderResponse.error("polymers_paypal_cancel_failed"));
+        }
+    }
+
     @PostMapping("/paypal/create")
     public ResponseEntity<?> createPayPalOrder(@RequestBody PayPalCreateOrderRequest request, HttpServletRequest httpRequest) {
         log.info("Creating PayPal order for customer: {} with amount: {} {}", 
@@ -852,9 +1025,45 @@ public class PaymentController {
                 com.zn.nursing.entity.NursingPricingConfig pricingConfig = nursingPricingConfigRepository.findById(request.getPricingConfigId())
                         .orElseThrow(() -> new IllegalArgumentException("Pricing config not found with ID: " + request.getPricingConfigId()));
                 
+                // Validate amount matches pricing config (amounts are in euros)
+                if (request.getAmount().compareTo(pricingConfig.getTotalPrice()) != 0) {
+                    throw new IllegalArgumentException(String.format(
+                        "Request amount %.2f does not match pricing config amount %.2f", 
+                        request.getAmount(), pricingConfig.getTotalPrice()));
+                }
+                
                 // Use backend pricing
                 request.setAmount(pricingConfig.getTotalPrice());
                 log.info("Using backend total price for PayPal: {} EUR", pricingConfig.getTotalPrice());
+            }
+            
+            // Create or find registration form first (same as Stripe flow)
+            com.zn.nursing.entity.NursingRegistrationForm registrationForm = null;
+            
+            // Try to find existing registration by email
+            java.util.Optional<com.zn.nursing.entity.NursingRegistrationForm> existingRegistration = 
+                nursingRegistrationFormRepository.findByEmail(request.getCustomerEmail());
+            
+            if (existingRegistration.isPresent()) {
+                registrationForm = existingRegistration.get();
+                log.info("Found existing Nursing registration for email: {}", request.getCustomerEmail());
+            } else {
+                // Create new registration form (same as Stripe checkout handling)
+                registrationForm = new com.zn.nursing.entity.NursingRegistrationForm();
+                registrationForm.setName(request.getCustomerName() != null ? request.getCustomerName() : "");
+                registrationForm.setPhone(request.getPhone() != null ? request.getPhone() : "");
+                registrationForm.setEmail(request.getCustomerEmail());
+                registrationForm.setInstituteOrUniversity(request.getInstituteOrUniversity() != null ? request.getInstituteOrUniversity() : "");
+                registrationForm.setCountry(request.getCountry() != null ? request.getCountry() : "");
+                
+                if (request.getPricingConfigId() != null) {
+                    com.zn.nursing.entity.NursingPricingConfig pricingConfig = nursingPricingConfigRepository.findById(request.getPricingConfigId()).get();
+                    registrationForm.setPricingConfig(pricingConfig);
+                    registrationForm.setAmountPaid(pricingConfig.getTotalPrice());
+                }
+                
+                registrationForm = nursingRegistrationFormRepository.save(registrationForm);
+                log.info("✅ Created new Nursing registration form with ID: {} for PayPal payment", registrationForm.getId());
             }
             
             // Call nursing service to create PayPal order
@@ -865,11 +1074,11 @@ public class PaymentController {
         } catch (IllegalArgumentException e) {
             log.error("Validation error creating Nursing PayPal order: {}", e.getMessage());
             return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                    .body(PayPalOrderResponse.error("validation_failed"));
+                    .body(PayPalOrderResponse.error("validation_failed: " + e.getMessage()));
         } catch (Exception e) {
             log.error("Error creating Nursing PayPal order: {}", e.getMessage(), e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(PayPalOrderResponse.error("paypal_order_creation_failed"));
+                    .body(PayPalOrderResponse.error("paypal_order_creation_failed: " + e.getMessage()));
         }
     }
     
