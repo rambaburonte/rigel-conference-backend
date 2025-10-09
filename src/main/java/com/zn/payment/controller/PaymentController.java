@@ -933,7 +933,42 @@ public class PaymentController {
     }
     
     /**
-     * Capture PayPal order with domain-based routing
+     * Capture PayPal order with domain-based routing - path variable version
+     * POST /api/payment/paypal/capture/{orderId}
+     */
+    @PostMapping("/paypal/capture/{orderId}")
+    public ResponseEntity<?> capturePayPalOrderByPath(@PathVariable String orderId, HttpServletRequest httpRequest) {
+        log.info("Capturing PayPal order by path: {}", orderId);
+        
+        String origin = httpRequest.getHeader("Origin");
+        if (origin == null) {
+            origin = httpRequest.getHeader("Referer");
+        }
+        
+        try {
+            // Route to appropriate service based on domain
+            if (origin != null && origin.contains("globallopmeet.com")) {
+                return ResponseEntity.ok(opticsStripeService.capturePayPalOrder(orderId));
+            } else if (origin != null && origin.contains("nursingmeet2026.com")) {
+                return ResponseEntity.ok(nursingStripeService.capturePayPalOrder(orderId));
+            } else if (origin != null && origin.contains("globalrenewablemeet.com")) {
+                return ResponseEntity.ok(renewableStripeService.capturePayPalOrder(orderId));
+            } else if (origin != null && origin.contains("polyscienceconference.com")) {
+                return ResponseEntity.ok(polymersStripeService.capturePayPalOrder(orderId));
+            } else {
+                // Default to nursing for localhost and other domains
+                log.info("Using nursing service for PayPal capture (default/localhost)");
+                return ResponseEntity.ok(nursingStripeService.capturePayPalOrder(orderId));
+            }
+        } catch (Exception e) {
+            log.error("Error capturing PayPal order: {}", e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(PayPalOrderResponse.error("paypal_capture_failed: " + e.getMessage()));
+        }
+    }
+
+    /**
+     * Capture PayPal order with domain-based routing - request body version
      * POST /api/payment/paypal/capture
      */
     @PostMapping("/paypal/capture")
