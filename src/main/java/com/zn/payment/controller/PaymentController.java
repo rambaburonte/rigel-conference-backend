@@ -376,7 +376,7 @@ public class PaymentController {
                     }
                 }
 
-                // Debug the extracted metadata values
+              // Debug the extracted metadata values
                 log.info("[Webhook Debug] Extracted metadata - productName: {}, paymentType: {}, source: {}", productName, paymentType, source);
 
                 // If paymentType is discount-registration or source is discount-api, DO NOT process in this webhook (handled by /api/discounts/webhook)
@@ -749,8 +749,8 @@ public class PaymentController {
                 log.info("Processing PayPal order for Polymers domain: {}", origin);
                 return handlePolymersPayPalOrder(request);
             } else {
-                log.error("Unknown frontend domain for PayPal: {}", origin + "default to polymers");
-                return handlePolymersPayPalOrder(request);
+                log.error("Unknown frontend domain for PayPal: {}", origin + "default to Nursing");
+                   return handleNursingPayPalOrder(request);
             }
         } catch (Exception e) {
             log.error("Error creating PayPal order: {}", e.getMessage(), e);
