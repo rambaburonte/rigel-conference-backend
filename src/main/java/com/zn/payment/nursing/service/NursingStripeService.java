@@ -30,7 +30,6 @@ import com.paypal.core.PayPalHttpClient;
 import com.paypal.http.HttpResponse;
 import com.paypal.orders.*;
 import java.util.ArrayList;
-import java.util.Arrays;
 import com.zn.nursing.entity.NursingPricingConfig;
 import com.zn.nursing.entity.NursingRegistrationForm;
 import com.zn.nursing.repository.INursingPricingConfigRepository;
@@ -98,9 +97,6 @@ public class NursingStripeService {
 
     @Value("${paypal.base.url}")
     private String paypalBaseUrl;
-
-    @Value("${paypal.nursing.webhook.secret}")
-    private String paypalWebhookSecret;
     
     // PayPal SDK Client
     private PayPalHttpClient paypalClient;
@@ -1823,11 +1819,11 @@ public NursingPaymentResponseDTO retrieveSession(String sessionId) throws Stripe
             NursingRegistrationForm registrationForm = null;
             
             // Try to find existing registration by email
-            java.util.Optional<NursingRegistrationForm> existingRegistration = 
-                registrationFormRepository.findByEmail(request.getCustomerEmail());
+            NursingRegistrationForm existingRegistration = 
+                registrationFormRepository.findTopByEmailOrderByIdDesc(request.getCustomerEmail());
             
-            if (existingRegistration.isPresent()) {
-                registrationForm = existingRegistration.get();
+            if (existingRegistration != null) {
+                registrationForm = existingRegistration;
                 log.info("Found existing Nursing registration for email: {}", request.getCustomerEmail());
             } else {
                 // Create new registration form

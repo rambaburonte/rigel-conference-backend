@@ -30,7 +30,6 @@ import com.paypal.core.PayPalHttpClient;
 import com.paypal.http.HttpResponse;
 import com.paypal.orders.*;
 import java.util.ArrayList;
-import java.util.Arrays;
 import com.zn.optics.entity.OpticsPricingConfig;
 import com.zn.optics.entity.OpticsRegistrationForm;
 import com.zn.optics.repository.IOpricsRegistrationFormRepository;
@@ -98,9 +97,6 @@ public class OpticsStripeService {
 
     @Value("${paypal.base.url}")
     private String paypalBaseUrl;
-
-    @Value("${paypal.optics.webhook.secret}")
-    private String paypalWebhookSecret;
     
     // PayPal SDK Client
     private PayPalHttpClient paypalClient;
@@ -1897,11 +1893,11 @@ public class OpticsStripeService {
             OpticsRegistrationForm registrationForm = null;
             
             // Try to find existing registration by email
-            java.util.Optional<OpticsRegistrationForm> existingRegistration = 
-                registrationFormRepository.findByEmail(request.getCustomerEmail());
+            OpticsRegistrationForm existingRegistration = 
+                registrationFormRepository.findTopByEmailOrderByIdDesc(request.getCustomerEmail());
             
-            if (existingRegistration.isPresent()) {
-                registrationForm = existingRegistration.get();
+            if (existingRegistration != null) {
+                registrationForm = existingRegistration;
                 log.info("Found existing Optics registration for email: {}", request.getCustomerEmail());
             } else {
                 // Create new registration form

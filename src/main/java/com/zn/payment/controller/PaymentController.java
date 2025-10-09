@@ -1041,11 +1041,11 @@ public class PaymentController {
             com.zn.nursing.entity.NursingRegistrationForm registrationForm = null;
             
             // Try to find existing registration by email
-            java.util.Optional<com.zn.nursing.entity.NursingRegistrationForm> existingRegistration = 
-                nursingRegistrationFormRepository.findByEmail(request.getCustomerEmail());
+            com.zn.nursing.entity.NursingRegistrationForm existingRegistration = 
+                nursingRegistrationFormRepository.findTopByEmailOrderByIdDesc(request.getCustomerEmail());
             
-            if (existingRegistration.isPresent()) {
-                registrationForm = existingRegistration.get();
+            if (existingRegistration != null) {
+                registrationForm = existingRegistration;
                 log.info("Found existing Nursing registration for email: {}", request.getCustomerEmail());
             } else {
                 // Create new registration form (same as Stripe checkout handling)

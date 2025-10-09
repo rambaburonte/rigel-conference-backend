@@ -30,7 +30,6 @@ import com.paypal.core.PayPalHttpClient;
 import com.paypal.http.HttpResponse;
 import com.paypal.orders.*;
 import java.util.ArrayList;
-import java.util.Arrays;
 import com.zn.payment.dto.CheckoutRequest;
 import com.zn.payment.polymers.dto.PolymersPaymentResponseDTO;
 import com.zn.payment.polymers.entity.PolymersPaymentRecord;
@@ -96,9 +95,6 @@ public class PolymersStripeService {
 
     @Value("${paypal.base.url}")
     private String paypalBaseUrl;
-
-    @Value("${paypal.polymers.webhook.secret}")
-    private String paypalWebhookSecret;
     
     // PayPal SDK Client
     private PayPalHttpClient paypalClient;
@@ -1630,11 +1626,11 @@ public PolymersPaymentResponseDTO retrieveSession(String sessionId) throws Strip
             PolymersRegistrationForm registrationForm = null;
             
             // Try to find existing registration by email
-            java.util.Optional<PolymersRegistrationForm> existingRegistration = 
-                registrationFormRepository.findByEmail(request.getCustomerEmail());
+            PolymersRegistrationForm existingRegistration = 
+                registrationFormRepository.findTopByEmailOrderByIdDesc(request.getCustomerEmail());
             
-            if (existingRegistration.isPresent()) {
-                registrationForm = existingRegistration.get();
+            if (existingRegistration != null) {
+                registrationForm = existingRegistration;
                 log.info("Found existing Polymers registration for email: {}", request.getCustomerEmail());
             } else {
                 // Create new registration form

@@ -29,7 +29,6 @@ import com.paypal.core.PayPalHttpClient;
 import com.paypal.http.HttpResponse;
 import com.paypal.orders.*;
 import java.util.ArrayList;
-import java.util.Arrays;
 import com.zn.payment.dto.CheckoutRequest;
 import com.zn.payment.dto.RenewablePaymentResponseDTO;
 import com.zn.payment.renewable.entity.RenewableDiscounts;
@@ -98,9 +97,6 @@ public class RenewaleStripeService {
 
     @Value("${paypal.base.url}")
     private String paypalBaseUrl;
-
-    @Value("${paypal.renewable.webhook.secret}")
-    private String paypalWebhookSecret;
     
     // PayPal SDK Client
     private PayPalHttpClient paypalClient;
@@ -1860,11 +1856,11 @@ public class RenewaleStripeService {
             RenewableRegistrationForm registrationForm = null;
             
             // Try to find existing registration by email
-            java.util.Optional<RenewableRegistrationForm> existingRegistration = 
-                registrationFormRepository.findByEmail(request.getCustomerEmail());
+            RenewableRegistrationForm existingRegistration = 
+                registrationFormRepository.findTopByEmailOrderByIdDesc(request.getCustomerEmail());
             
-            if (existingRegistration.isPresent()) {
-                registrationForm = existingRegistration.get();
+            if (existingRegistration != null) {
+                registrationForm = existingRegistration;
                 log.info("Found existing Renewable registration for email: {}", request.getCustomerEmail());
             } else {
                 // Create new registration form
