@@ -37,7 +37,6 @@ import com.zn.payment.dto.CreateDiscountSessionRequest;
 import com.zn.payment.dto.PayPalCreateOrderRequest;
 import com.zn.payment.dto.PayPalOrderResponse;
 import com.zn.payment.polymers.entity.PolymersDiscounts;
-import com.zn.payment.polymers.entity.PolymersPaymentRecord;
 import com.zn.payment.polymers.entity.PolymersPaymentRecord.PaymentStatus;
 import com.zn.payment.polymers.repository.PolymersDiscountsRepository;
 
