@@ -6,6 +6,7 @@ import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -15,6 +16,19 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.paypal.core.PayPalEnvironment;
+import com.paypal.core.PayPalHttpClient;
+import com.paypal.http.HttpResponse;
+import com.paypal.orders.AmountWithBreakdown;
+import com.paypal.orders.ApplicationContext;
+import com.paypal.orders.Capture;
+import com.paypal.orders.LinkDescription;
+import com.paypal.orders.Order;
+import com.paypal.orders.OrderRequest;
+import com.paypal.orders.OrdersCaptureRequest;
+import com.paypal.orders.OrdersCreateRequest;
+import com.paypal.orders.PurchaseUnit;
+import com.paypal.orders.PurchaseUnitRequest;
 import com.stripe.Stripe;
 import com.stripe.exception.SignatureVerificationException;
 import com.stripe.exception.StripeException;
@@ -23,13 +37,6 @@ import com.stripe.model.EventDataObjectDeserializer;
 import com.stripe.model.checkout.Session;
 import com.stripe.net.Webhook;
 import com.stripe.param.checkout.SessionCreateParams;
-
-// PayPal SDK imports
-import com.paypal.core.PayPalEnvironment;
-import com.paypal.core.PayPalHttpClient;
-import com.paypal.http.HttpResponse;
-import com.paypal.orders.*;
-import java.util.ArrayList;
 import com.zn.nursing.entity.NursingPricingConfig;
 import com.zn.nursing.entity.NursingRegistrationForm;
 import com.zn.nursing.repository.INursingPricingConfigRepository;
@@ -1843,19 +1850,16 @@ public NursingPaymentResponseDTO retrieveSession(String sessionId) throws Stripe
                 log.info("✅ Created new Nursing registration form with ID: {}", registrationForm.getId());
             }
 
-            // Generate internal order ID for tracking
-            String internalOrderId = "NURSING_PAYPAL_" + System.currentTimeMillis() + "_" + registrationForm.getId();
+            // Create PayPal order via SDK - this will return the actual PayPal order ID and approval URL
+            PayPalOrderResult orderResult = createPayPalOrderAPI(request, registrationForm.getId());
             
-            // Create PayPal order via SDK - this will return the actual PayPal order ID
-            String approvalUrl = createPayPalOrderAPI(request, internalOrderId);
+            // Use PayPal's actual order ID instead of custom internal ID
+            String paypalOrderId = orderResult.getOrderId();
+            String approvalUrl = orderResult.getApprovalUrl();
             
-            // Extract PayPal order ID from the approval URL or store it separately
-            // The createPayPalOrderAPI should return both approval URL and PayPal order ID
-            // For now, we'll use a temporary approach
-            
-            // Create payment record with internal order ID (we'll update with PayPal order ID later)
+            // Create payment record with PayPal's actual order ID
             NursingPaymentRecord paymentRecord = NursingPaymentRecord.builder()
-                    .sessionId(internalOrderId) // Store internal ID for now
+                    .sessionId(paypalOrderId) // Store PayPal's actual order ID
                     .customerEmail(request.getCustomerEmail())
                     .amountTotal(request.getAmount())
                     .currency(request.getCurrency() != null ? request.getCurrency().toUpperCase() : "EUR")
@@ -1873,13 +1877,13 @@ public NursingPaymentResponseDTO retrieveSession(String sessionId) throws Stripe
             
             // Save payment record
             NursingPaymentRecord savedRecord = paymentRecordRepository.save(paymentRecord);
-            log.info("💾 Saved Nursing PayPal payment record with ID: {} for internal order: {}", 
-                    savedRecord.getId(), internalOrderId);
+            log.info("💾 Saved Nursing PayPal payment record with ID: {} for PayPal order: {}", 
+                    savedRecord.getId(), paypalOrderId);
             
-            log.info("✅ Created PayPal order for Nursing: {} with approval URL: {}", internalOrderId, approvalUrl);
+            log.info("✅ Created PayPal order for Nursing: {} with approval URL: {}", paypalOrderId, approvalUrl);
             
             return com.zn.payment.dto.PayPalOrderResponse.success(
-                    internalOrderId, 
+                    paypalOrderId, 
                     approvalUrl, 
                     request.getCustomerEmail(),
                     request.getAmount().toString(),
@@ -1894,11 +1898,11 @@ public NursingPaymentResponseDTO retrieveSession(String sessionId) throws Stripe
 
     /**
      * Create PayPal order via PayPal SDK
-     * Returns approval URL for user redirect - PRODUCTION READY
+     * Returns PayPal order result with order ID and approval URL - PRODUCTION READY
      */
-    private String createPayPalOrderAPI(com.zn.payment.dto.PayPalCreateOrderRequest request, String orderId) {
+    private PayPalOrderResult createPayPalOrderAPI(com.zn.payment.dto.PayPalCreateOrderRequest request, Long registrationFormId) {
         try {
-            log.info("🚀 Creating real PayPal order via SDK for order: {}", orderId);
+            log.info("🚀 Creating real PayPal order via SDK for registration form: {}", registrationFormId);
             
             // Build PayPal order request using SDK
             OrderRequest orderRequest = new OrderRequest();
@@ -1906,8 +1910,8 @@ public NursingPaymentResponseDTO retrieveSession(String sessionId) throws Stripe
             
             // Set application context
             ApplicationContext applicationContext = new ApplicationContext()
-                .returnUrl(request.getSuccessUrl() + "?paymentMethod=paypal&token=" + orderId)
-                .cancelUrl(request.getCancelUrl() + "?paymentMethod=paypal&cancelled=true&token=" + orderId)
+                .returnUrl(request.getSuccessUrl() + "?paymentMethod=paypal")
+                .cancelUrl(request.getCancelUrl() + "?paymentMethod=paypal&cancelled=true")
                 .brandName("Nursing Summit 2026")
                 .landingPage("BILLING")
                 .userAction("PAY_NOW");
@@ -1923,9 +1927,9 @@ public NursingPaymentResponseDTO retrieveSession(String sessionId) throws Stripe
                 .value(request.getAmount().toString());
             
             PurchaseUnitRequest purchaseUnitRequest = new PurchaseUnitRequest()
-                .referenceId(orderId)
+                .referenceId("REG_" + registrationFormId)
                 .description("Nursing Summit 2026 Registration - " + request.getCustomerEmail())
-                .customId(orderId)
+                .customId("NURSING_REG_" + registrationFormId)
                 .softDescriptor("NURSINGSUMMIT")
                 .amountWithBreakdown(amountBreakdown);
             
@@ -1956,11 +1960,33 @@ public NursingPaymentResponseDTO retrieveSession(String sessionId) throws Stripe
             }
             
             log.info("🔗 PayPal approval URL generated: {}", approvalUrl);
-            return approvalUrl;
+            
+            return new PayPalOrderResult(order.id(), approvalUrl);
             
         } catch (Exception e) {
             log.error("❌ Error creating PayPal order via SDK: {}", e.getMessage(), e);
             throw new RuntimeException("PayPal SDK error: " + e.getMessage(), e);
+        }
+    }
+    
+    /**
+     * Helper class to return both PayPal order ID and approval URL
+     */
+    private static class PayPalOrderResult {
+        private final String orderId;
+        private final String approvalUrl;
+        
+        public PayPalOrderResult(String orderId, String approvalUrl) {
+            this.orderId = orderId;
+            this.approvalUrl = approvalUrl;
+        }
+        
+        public String getOrderId() {
+            return orderId;
+        }
+        
+        public String getApprovalUrl() {
+            return approvalUrl;
         }
     }
     
