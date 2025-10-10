@@ -2,7 +2,9 @@ package com.zn.payment.nursing.service;
 
 import java.io.IOException;
 import java.math.BigDecimal;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
@@ -11,6 +13,19 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import com.google.gson.JsonSyntaxException;
+import com.paypal.core.PayPalEnvironment;
+import com.paypal.core.PayPalHttpClient;
+import com.paypal.http.HttpResponse;
+import com.paypal.orders.AmountWithBreakdown;
+import com.paypal.orders.ApplicationContext;
+import com.paypal.orders.Capture;
+import com.paypal.orders.LinkDescription;
+import com.paypal.orders.Order;
+import com.paypal.orders.OrderRequest;
+import com.paypal.orders.OrdersCaptureRequest;
+import com.paypal.orders.OrdersCreateRequest;
+import com.paypal.orders.PurchaseUnit;
+import com.paypal.orders.PurchaseUnitRequest;
 import com.stripe.Stripe;
 import com.stripe.exception.SignatureVerificationException;
 import com.stripe.exception.StripeException;
@@ -19,11 +34,14 @@ import com.stripe.model.checkout.Session;
 import com.stripe.net.Webhook;
 import com.stripe.param.checkout.SessionCreateParams;
 import com.zn.payment.dto.CreateDiscountSessionRequest;
+import com.zn.payment.dto.PayPalCreateOrderRequest;
+import com.zn.payment.dto.PayPalOrderResponse;
 import com.zn.payment.nursing.entity.NursingDiscounts;
 import com.zn.payment.nursing.entity.NursingPaymentRecord;
 import com.zn.payment.nursing.entity.NursingPaymentRecord.PaymentStatus;
 import com.zn.payment.nursing.repository.NursingDiscountsRepository;
 
+import jakarta.annotation.PostConstruct;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
 
@@ -67,14 +85,45 @@ public class NursingDiscountsService {
         }
         return false;
     }
-      @Value("${stripe.api.secret.key}")
+    @Value("${stripe.api.secret.key}")
     private String secretKey;
 
     @Value("${stripe.discount.webhook}")
     private String webhookSecret;
 
+    @Value("${paypal.client.id}")
+    private String paypalClientId;
+
+    @Value("${paypal.client.secret}")
+    private String paypalClientSecret;
+
+    @Value("${paypal.mode:sandbox}")
+    private String paypalMode;
+
     @Autowired
     private NursingDiscountsRepository discountsRepository;
+
+    private PayPalHttpClient paypalClient;
+
+    /**
+     * Initialize PayPal client after bean construction
+     */
+    @PostConstruct
+    public void initPayPalClient() {
+        try {
+            PayPalEnvironment environment;
+            if ("live".equals(paypalMode)) {
+                environment = new PayPalEnvironment.Live(paypalClientId, paypalClientSecret);
+            } else {
+                environment = new PayPalEnvironment.Sandbox(paypalClientId, paypalClientSecret);
+            }
+            
+            this.paypalClient = new PayPalHttpClient(environment);
+            log.info("✅ PayPal client initialized for Nursing Discounts in {} mode", paypalMode);
+        } catch (Exception e) {
+            log.error("❌ Failed to initialize PayPal client for Nursing Discounts: {}", e.getMessage(), e);
+        }
+    }
 
     public Object createSession(CreateDiscountSessionRequest request) {
         // Validate request
@@ -645,5 +694,216 @@ public class NursingDiscountsService {
         
         log.info("📋 PayPal discount order status (from database): {} - Status: {}", orderId, discountRecord.getStatus());
         return discountRecord;
+    }
+
+    // ===== PAYPAL INTEGRATION FOR NURSING DISCOUNTS =====
+
+    /**
+     * Create PayPal order for Nursing discount payments
+     */
+    public PayPalOrderResponse createPayPalOrder(PayPalCreateOrderRequest request) {
+        log.info("Creating PayPal order for Nursing discount - Amount: {} {}, Customer: {}", 
+                request.getAmount(), request.getCurrency(), request.getCustomerEmail());
+        
+        try {
+            // Validate request
+            if (request.getCustomerEmail() == null || request.getCustomerEmail().trim().isEmpty()) {
+                throw new IllegalArgumentException("Customer email is required for PayPal order");
+            }
+            
+            if (request.getAmount() == null || request.getAmount().compareTo(BigDecimal.ZERO) <= 0) {
+                throw new IllegalArgumentException("Amount must be greater than zero");
+            }
+
+            // Create PayPal order via SDK - this will return the actual PayPal order ID and approval URL
+            PayPalOrderResult orderResult = createPayPalOrderAPI(request);
+            
+            // Use PayPal's actual order ID instead of custom internal ID
+            String paypalOrderId = orderResult.getOrderId();
+            String approvalUrl = orderResult.getApprovalUrl();
+            
+            // Create discount record with PayPal's actual order ID
+            NursingDiscounts discountRecord = new NursingDiscounts();
+            discountRecord.setSessionId(paypalOrderId); // Store PayPal's actual order ID
+            discountRecord.setName(request.getCustomerName() != null ? request.getCustomerName() : "");
+            discountRecord.setPhone(request.getPhone() != null ? request.getPhone() : "");
+            discountRecord.setCustomerEmail(request.getCustomerEmail());
+            discountRecord.setInstituteOrUniversity(request.getInstituteOrUniversity() != null ? request.getInstituteOrUniversity() : "");
+            discountRecord.setCountry(request.getCountry() != null ? request.getCountry() : "");
+            discountRecord.setAmountTotal(request.getAmount());
+            discountRecord.setCurrency(request.getCurrency() != null ? request.getCurrency().toUpperCase() : "EUR");
+            discountRecord.setStatus(PaymentStatus.PENDING);
+            discountRecord.setPaymentStatus("unpaid");
+            discountRecord.setStripeCreatedAt(java.time.LocalDateTime.now());
+            
+            // Save discount record
+            NursingDiscounts savedRecord = discountsRepository.save(discountRecord);
+            log.info("💾 Saved Nursing PayPal discount record with ID: {} for PayPal order: {}", 
+                    savedRecord.getId(), paypalOrderId);
+            
+            log.info("✅ Created PayPal discount order for Nursing: {} with approval URL: {}", paypalOrderId, approvalUrl);
+            
+            return PayPalOrderResponse.success(
+                    paypalOrderId, 
+                    approvalUrl, 
+                    request.getCustomerEmail(),
+                    request.getAmount().toString(),
+                    request.getCurrency()
+            );
+            
+        } catch (Exception e) {
+            log.error("❌ Error creating PayPal discount order for Nursing: {}", e.getMessage(), e);
+            return PayPalOrderResponse.error("paypal_discount_order_creation_failed: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Create PayPal order via PayPal SDK for discount payments
+     */
+    private PayPalOrderResult createPayPalOrderAPI(PayPalCreateOrderRequest request) {
+        try {
+            log.info("🚀 Creating real PayPal discount order via SDK");
+            
+            // Build PayPal order request using SDK
+            OrderRequest orderRequest = new OrderRequest();
+            orderRequest.checkoutPaymentIntent("CAPTURE");
+            
+            // Set application context
+            ApplicationContext applicationContext = new ApplicationContext()
+                .returnUrl(request.getSuccessUrl() + "?paymentMethod=paypal&type=discount")
+                .cancelUrl(request.getCancelUrl() + "?paymentMethod=paypal&type=discount&cancelled=true")
+                .brandName("Nursing Summit 2026 - Discount")
+                .landingPage("BILLING")
+                .userAction("PAY_NOW");
+            
+            orderRequest.applicationContext(applicationContext);
+            
+            // Create purchase units
+            List<PurchaseUnitRequest> purchaseUnits = new ArrayList<>();
+            
+            // Create amount breakdown
+            AmountWithBreakdown amountBreakdown = new AmountWithBreakdown()
+                .currencyCode(request.getCurrency() != null ? request.getCurrency().toUpperCase() : "EUR")
+                .value(request.getAmount().toString());
+            
+            PurchaseUnitRequest purchaseUnitRequest = new PurchaseUnitRequest()
+                .referenceId("DISCOUNT_" + System.currentTimeMillis())
+                .description("Nursing Summit 2026 Discount - " + request.getCustomerEmail())
+                .customId("NURSING_DISCOUNT_" + System.currentTimeMillis())
+                .softDescriptor("NURSINGSUMMIT")
+                .amountWithBreakdown(amountBreakdown);
+            
+            purchaseUnits.add(purchaseUnitRequest);
+            orderRequest.purchaseUnits(purchaseUnits);
+            
+            // Create the order
+            OrdersCreateRequest ordersCreateRequest = new OrdersCreateRequest();
+            ordersCreateRequest.prefer("return=representation");
+            ordersCreateRequest.requestBody(orderRequest);
+            
+            HttpResponse<Order> response = paypalClient.execute(ordersCreateRequest);
+            Order order = response.result();
+            
+            log.info("✅ PayPal discount order created successfully: {} with status: {}", order.id(), order.status());
+            
+            // Extract approval URL
+            String approvalUrl = null;
+            for (LinkDescription link : order.links()) {
+                if ("approve".equals(link.rel())) {
+                    approvalUrl = link.href();
+                    break;
+                }
+            }
+            
+            if (approvalUrl == null) {
+                throw new RuntimeException("PayPal approval URL not found in response");
+            }
+            
+            log.info("🔗 PayPal discount approval URL generated: {}", approvalUrl);
+            
+            return new PayPalOrderResult(order.id(), approvalUrl);
+            
+        } catch (Exception e) {
+            log.error("❌ Error creating PayPal discount order via SDK: {}", e.getMessage(), e);
+            throw new RuntimeException("PayPal SDK error: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Capture PayPal order for Nursing discount payments
+     */
+    public PayPalOrderResponse capturePayPalOrder(String orderId) {
+        log.info("Capturing PayPal discount order for Nursing: {}", orderId);
+        
+        try {
+            // Capture the PayPal order
+            OrdersCaptureRequest ordersCaptureRequest = new OrdersCaptureRequest(orderId);
+            ordersCaptureRequest.prefer("return=representation");
+            
+            HttpResponse<Order> response = paypalClient.execute(ordersCaptureRequest);
+            Order order = response.result();
+            
+            log.info("✅ PayPal discount order captured successfully: {} with status: {}", order.id(), order.status());
+            
+            // Update discount record
+            NursingDiscounts discountRecord = discountsRepository.findBySessionId(orderId);
+            if (discountRecord != null) {
+                discountRecord.setStatus(PaymentStatus.COMPLETED);
+                discountRecord.setPaymentStatus("paid");
+                discountRecord.setUpdatedAt(java.time.LocalDateTime.now());
+                
+                // Extract capture details
+                if (order.purchaseUnits() != null && !order.purchaseUnits().isEmpty()) {
+                    PurchaseUnit purchaseUnit = order.purchaseUnits().get(0);
+                    if (purchaseUnit.payments() != null && 
+                        purchaseUnit.payments().captures() != null && 
+                        !purchaseUnit.payments().captures().isEmpty()) {
+                        
+                        Capture capture = purchaseUnit.payments().captures().get(0);
+                        discountRecord.setPaymentIntentId(capture.id()); // Store capture ID
+                        
+                        log.info("💾 Updated Nursing discount record with capture ID: {}", capture.id());
+                    }
+                }
+                
+                discountsRepository.save(discountRecord);
+                log.info("✅ Updated Nursing discount record status to COMPLETED for PayPal order: {}", orderId);
+            } else {
+                log.warn("⚠️ No Nursing discount record found for PayPal order: {}", orderId);
+            }
+            
+            return PayPalOrderResponse.success(
+                    order.id(),
+                    null, // No approval URL needed for capture
+                    discountRecord != null ? discountRecord.getCustomerEmail() : "",
+                    discountRecord != null ? discountRecord.getAmountTotal().toString() : "0.00",
+                    discountRecord != null ? discountRecord.getCurrency() : "EUR"
+            );
+            
+        } catch (Exception e) {
+            log.error("❌ Error capturing PayPal discount order for Nursing: {}", e.getMessage(), e);
+            return PayPalOrderResponse.error("paypal_discount_capture_failed: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Helper class to return both PayPal order ID and approval URL
+     */
+    private static class PayPalOrderResult {
+        private final String orderId;
+        private final String approvalUrl;
+        
+        public PayPalOrderResult(String orderId, String approvalUrl) {
+            this.orderId = orderId;
+            this.approvalUrl = approvalUrl;
+        }
+        
+        public String getOrderId() {
+            return orderId;
+        }
+        
+        public String getApprovalUrl() {
+            return approvalUrl;
+        }
     }
 }

@@ -903,15 +903,13 @@ public class DiscountsController {
     private ResponseEntity<PayPalOrderResponse> handleNursingPayPalDiscountOrder(PayPalCreateOrderRequest request) {
         try {
             log.info("Creating PayPal discount order for Nursing: {}", request.getCustomerEmail());
-            // TODO: Implement actual PayPal order creation for Nursing discounts
-            // For now, return mock response - implement when discount services have PayPal methods
-            return ResponseEntity.ok(PayPalOrderResponse.success(
-                    "MOCK_NURSING_DISCOUNT_ORDER_" + System.currentTimeMillis(),
-                    "https://www.sandbox.paypal.com/checkoutnow?token=MOCK_TOKEN",
-                    request.getCustomerEmail(),
-                    request.getAmount().toString(),
-                    request.getCurrency()
-            ));
+            PayPalOrderResponse response = nursingDiscountsService.createPayPalOrder(request);
+            
+            if (response.isSuccess()) {
+                return ResponseEntity.ok(response);
+            } else {
+                return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(response);
+            }
         } catch (Exception e) {
             log.error("Error creating PayPal discount order for Nursing: {}", e.getMessage(), e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
@@ -922,15 +920,13 @@ public class DiscountsController {
     private ResponseEntity<PayPalOrderResponse> handleNursingPayPalDiscountCapture(String orderId) {
         try {
             log.info("Capturing PayPal discount order for Nursing: {}", orderId);
-            // TODO: Implement actual PayPal order capture for Nursing discounts
-            // For now, return mock response - implement when discount services have PayPal methods
-            return ResponseEntity.ok(PayPalOrderResponse.success(
-                    orderId,
-                    null, // No approval URL needed for capture
-                    "mock@nursing.com",
-                    "40.00",
-                    "EUR"
-            ));
+            PayPalOrderResponse response = nursingDiscountsService.capturePayPalOrder(orderId);
+            
+            if (response.isSuccess()) {
+                return ResponseEntity.ok(response);
+            } else {
+                return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(response);
+            }
         } catch (Exception e) {
             log.error("Error capturing PayPal discount order for Nursing: {}", e.getMessage(), e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
