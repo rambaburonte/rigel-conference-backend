@@ -251,24 +251,25 @@ public class RenewaleStripeService {
                     discount.setSessionId(paymentRecord.getSessionId());
                 } else {
                     log.info("📝 Updating existing RenewableDiscounts ID: {} for session: {}", 
-                             discount.getId() != null ? discount.getId() : "null", paymentRecord.getSessionId());
+                             discount != null && discount.getId() != null ? discount.getId() : "null", 
+                             paymentRecord.getSessionId());
                 }
                 
                 // Sync all fields from payment record to discount record
-                syncDiscountFields(paymentRecord, discount);
-                
-                // Save the discount record
-                RenewableDiscounts savedDiscount = renewableDiscountsRepository.save(discount);
-                
-                if (isNewDiscount) {
-                    log.info("✅ Created new RenewableDiscounts ID: {} synced with PaymentRecord ID: {}", 
-                             savedDiscount.getId(), paymentRecord.getId());
-                } else {
-                    log.info("✅ Updated RenewableDiscounts ID: {} synced with PaymentRecord ID: {}", 
-                             savedDiscount.getId(), paymentRecord.getId());
-                }
-                
-            } catch (Exception fallbackException) {
+                if (discount != null) {
+                    syncDiscountFields(paymentRecord, discount);
+                    
+                    // Save the discount record
+                    RenewableDiscounts savedDiscount = renewableDiscountsRepository.save(discount);
+                    
+                    if (isNewDiscount) {
+                        log.info("✅ Created new RenewableDiscounts ID: {} synced with PaymentRecord ID: {}", 
+                                savedDiscount.getId(), paymentRecord.getId());
+                    } else {
+                        log.info("✅ Updated RenewableDiscounts ID: {} synced with PaymentRecord ID: {}", 
+                                savedDiscount.getId(), paymentRecord.getId());
+                    }
+                }            } catch (Exception fallbackException) {
                 log.error("❌ Manual sync fallback also failed for payment record ID {}: {}", 
                           paymentRecord.getId(), fallbackException.getMessage());
             }
@@ -583,12 +584,12 @@ public class RenewaleStripeService {
                 RenewableRegistrationForm existingRegistration = 
                     registrationFormRepository.findTopByEmailOrderByIdDesc(request.getEmail());
                 
-                if (existingRegistration != null && existingRegistration.getPaymentRecord() == null) {
+                if (existingRegistration != null && existingRegistration.getRenewablePaymentRecord() == null) {
                     log.info("🔗 Linking existing Renewable registration form ID: {} to payment record ID: {}", 
                             existingRegistration.getId(), record.getId());
                     
                     // Establish bidirectional relationship
-                    existingRegistration.setPaymentRecord(record);
+                    existingRegistration.setRenewablePaymentRecord(record);
                     record.setRegistrationForm(existingRegistration);
                     
                     // Save both entities
@@ -1934,7 +1935,7 @@ public class RenewaleStripeService {
             RenewablePaymentRecord savedRecord = paymentRecordRepository.save(paymentRecord);
             
             // ✅ CRITICAL: Establish bidirectional relationship
-            registrationForm.setPaymentRecord(savedRecord);
+            registrationForm.setRenewablePaymentRecord(savedRecord);
             registrationFormRepository.save(registrationForm);
             
             log.info("💾 Saved Renewable PayPal payment record with ID: {} for PayPal order: {}", 
