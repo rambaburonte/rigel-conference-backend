@@ -19,6 +19,9 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.stripe.model.Event;
 import com.zn.payment.dto.CreateDiscountSessionRequest;
+import com.zn.payment.dto.PayPalCaptureOrderRequest;
+import com.zn.payment.dto.PayPalCreateOrderRequest;
+import com.zn.payment.dto.PayPalOrderResponse;
 import com.zn.payment.nursing.repository.NursingDiscountsRepository;
 import com.zn.payment.nursing.service.NursingDiscountsService;
 import com.zn.payment.optics.repository.OpticsDiscountsRepository;
@@ -644,6 +647,485 @@ public class DiscountsController {
         } catch (Exception e) {
             log.error("Error processing discount webhook: {}", e.getMessage(), e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("Discount webhook processing failed");
+        }
+    }
+
+    // ======================= PAYPAL DISCOUNT ENDPOINTS =======================
+    
+    /**
+     * Create PayPal order for discount registration with domain-based routing
+     * POST /api/discounts/paypal/create
+     */
+    @PostMapping("/paypal/create")
+    public ResponseEntity<?> createPayPalDiscountOrder(@RequestBody PayPalCreateOrderRequest request, HttpServletRequest httpRequest) {
+        log.info("Creating PayPal discount order for customer: {} with amount: {} {}", 
+                request.getCustomerEmail(), request.getAmount(), request.getCurrency());
+        
+        String origin = httpRequest.getHeader("Origin");
+        if (origin == null) {
+            origin = httpRequest.getHeader("Referer");
+        }
+        
+        if (origin == null) {
+            log.error("Origin or Referer header is missing for PayPal discount order");
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(PayPalOrderResponse.error("origin_or_referer_missing"));
+        }
+        
+        try {
+            // Route to appropriate discount service based on domain
+            if (origin.contains("globallopmeet.com")) {
+                return handleOpticsPayPalDiscountOrder(request);
+            } else if (origin.contains("nursingmeet2026.com")) {
+                return handleNursingPayPalDiscountOrder(request);
+            } else if (origin.contains("globalrenewablemeet.com")) {
+                return handleRenewablePayPalDiscountOrder(request);
+            } else if (origin.contains("polyscienceconference.com")) {
+                return handlePolymersPayPalDiscountOrder(request);
+            } else {
+                log.warn("Unknown origin for PayPal discount order: {}, defaulting to Nursing", origin);
+                return handleNursingPayPalDiscountOrder(request);
+            }
+        } catch (Exception e) {
+            log.error("Error creating PayPal discount order: {}", e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(PayPalOrderResponse.error("paypal_discount_order_creation_failed"));
+        }
+    }
+    
+    /**
+     * Capture PayPal discount order with domain-based routing - path variable version
+     * POST /api/discounts/paypal/capture/{orderId}
+     */
+    @PostMapping("/paypal/capture/{orderId}")
+    public ResponseEntity<?> capturePayPalDiscountOrderByPath(@PathVariable String orderId, HttpServletRequest httpRequest) {
+        log.info("Capturing PayPal discount order by path: {}", orderId);
+        
+        String origin = httpRequest.getHeader("Origin");
+        if (origin == null) {
+            origin = httpRequest.getHeader("Referer");
+        }
+        
+        try {
+            // Route to appropriate discount service based on domain
+            if (origin != null && origin.contains("globallopmeet.com")) {
+                return handleOpticsPayPalDiscountCapture(orderId);
+            } else if (origin != null && origin.contains("nursingmeet2026.com")) {
+                return handleNursingPayPalDiscountCapture(orderId);
+            } else if (origin != null && origin.contains("globalrenewablemeet.com")) {
+                return handleRenewablePayPalDiscountCapture(orderId);
+            } else if (origin != null && origin.contains("polyscienceconference.com")) {
+                return handlePolymersPayPalDiscountCapture(orderId);
+            } else {
+                // Try all discount services to find the PayPal order
+                return tryAllDiscountServicesForCapture(orderId);
+            }
+        } catch (Exception e) {
+            log.error("Error capturing PayPal discount order by path {}: {}", orderId, e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(PayPalOrderResponse.error("paypal_discount_capture_failed"));
+        }
+    }
+
+    /**
+     * Capture PayPal discount order with domain-based routing - request body version
+     * POST /api/discounts/paypal/capture
+     */
+    @PostMapping("/paypal/capture")
+    public ResponseEntity<?> capturePayPalDiscountOrder(@RequestBody PayPalCaptureOrderRequest request, HttpServletRequest httpRequest) {
+        log.info("Capturing PayPal discount order: {}", request.getOrderId());
+        
+        String origin = httpRequest.getHeader("Origin");
+        if (origin == null) {
+            origin = httpRequest.getHeader("Referer");
+        }
+        
+        try {
+            // Route to appropriate discount service based on domain
+            if (origin != null && origin.contains("globallopmeet.com")) {
+                return handleOpticsPayPalDiscountCapture(request.getOrderId());
+            } else if (origin != null && origin.contains("nursingmeet2026.com")) {
+                return handleNursingPayPalDiscountCapture(request.getOrderId());
+            } else if (origin != null && origin.contains("globalrenewablemeet.com")) {
+                return handleRenewablePayPalDiscountCapture(request.getOrderId());
+            } else if (origin != null && origin.contains("polyscienceconference.com")) {
+                return handlePolymersPayPalDiscountCapture(request.getOrderId());
+            } else {
+                // Try all discount services to find the PayPal order
+                return tryAllDiscountServicesForCapture(request.getOrderId());
+            }
+        } catch (Exception e) {
+            log.error("Error capturing PayPal discount order {}: {}", request.getOrderId(), e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(PayPalOrderResponse.error("paypal_discount_capture_failed"));
+        }
+    }
+    
+    /**
+     * Handle PayPal discount return URL - called when user approves payment and PayPal redirects back
+     * GET /api/discounts/paypal/return?token=ORDER_ID&PayerID=PAYER_ID
+     */
+    @GetMapping("/paypal/return")
+    public ResponseEntity<?> handlePayPalDiscountReturn(@RequestParam String token, 
+                                                      @RequestParam(required = false) String PayerID,
+                                                      HttpServletRequest httpRequest) {
+        log.info("Handling PayPal discount return for token: {} and PayerID: {}", token, PayerID);
+        
+        String origin = httpRequest.getHeader("Origin");
+        if (origin == null) {
+            origin = httpRequest.getHeader("Referer");
+        }
+        
+        try {
+            // Route to appropriate discount service based on domain
+            if (origin != null && origin.contains("globallopmeet.com")) {
+                return handleOpticsPayPalDiscountReturn(token, PayerID);
+            } else if (origin != null && origin.contains("nursingmeet2026.com")) {
+                return handleNursingPayPalDiscountReturn(token, PayerID);
+            } else if (origin != null && origin.contains("globalrenewablemeet.com")) {
+                return handleRenewablePayPalDiscountReturn(token, PayerID);
+            } else if (origin != null && origin.contains("polyscienceconference.com")) {
+                return handlePolymersPayPalDiscountReturn(token, PayerID);
+            } else {
+                log.warn("Unknown origin for PayPal discount return: {}, defaulting to Nursing", origin);
+                return handleNursingPayPalDiscountReturn(token, PayerID);
+            }
+        } catch (Exception e) {
+            log.error("Error handling PayPal discount return for token {}: {}", token, e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(PayPalOrderResponse.error("paypal_discount_return_handling_failed"));
+        }
+    }
+    
+    /**
+     * Handle PayPal discount cancel URL - called when user cancels payment and PayPal redirects back
+     * GET /api/discounts/paypal/cancel?token=ORDER_ID
+     */
+    @GetMapping("/paypal/cancel")
+    public ResponseEntity<?> handlePayPalDiscountCancel(@RequestParam String token, 
+                                                      HttpServletRequest httpRequest) {
+        log.info("Handling PayPal discount cancel for token: {}", token);
+        
+        String origin = httpRequest.getHeader("Origin");
+        if (origin == null) {
+            origin = httpRequest.getHeader("Referer");
+        }
+        
+        try {
+            // Route to appropriate discount service based on domain
+            if (origin != null && origin.contains("globallopmeet.com")) {
+                return handleOpticsPayPalDiscountCancel(token);
+            } else if (origin != null && origin.contains("nursingmeet2026.com")) {
+                return handleNursingPayPalDiscountCancel(token);
+            } else if (origin != null && origin.contains("globalrenewablemeet.com")) {
+                return handleRenewablePayPalDiscountCancel(token);
+            } else if (origin != null && origin.contains("polyscienceconference.com")) {
+                return handlePolymersPayPalDiscountCancel(token);
+            } else {
+                log.warn("Unknown origin for PayPal discount cancel: {}, defaulting to Nursing", origin);
+                return handleNursingPayPalDiscountCancel(token);
+            }
+        } catch (Exception e) {
+            log.error("Error handling PayPal discount cancel for token {}: {}", token, e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(PayPalOrderResponse.error("paypal_discount_cancel_handling_failed"));
+        }
+    }
+    
+    // ======================= PAYPAL DISCOUNT SERVICE HANDLERS =======================
+    
+    // === OPTICS PAYPAL DISCOUNT HANDLERS ===
+    
+    private ResponseEntity<PayPalOrderResponse> handleOpticsPayPalDiscountOrder(PayPalCreateOrderRequest request) {
+        try {
+            log.info("Creating PayPal discount order for Optics: {}", request.getCustomerEmail());
+            // TODO: Implement actual PayPal order creation for Optics discounts
+            // For now, return mock response - implement when discount services have PayPal methods
+            return ResponseEntity.ok(PayPalOrderResponse.success(
+                    "MOCK_OPTICS_DISCOUNT_ORDER_" + System.currentTimeMillis(),
+                    "https://www.sandbox.paypal.com/checkoutnow?token=MOCK_TOKEN",
+                    request.getCustomerEmail(),
+                    request.getAmount().toString(),
+                    request.getCurrency()
+            ));
+        } catch (Exception e) {
+            log.error("Error creating PayPal discount order for Optics: {}", e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(PayPalOrderResponse.error("optics_paypal_discount_order_creation_failed"));
+        }
+    }
+    
+    private ResponseEntity<PayPalOrderResponse> handleOpticsPayPalDiscountCapture(String orderId) {
+        try {
+            log.info("Capturing PayPal discount order for Optics: {}", orderId);
+            // TODO: Implement actual PayPal order capture for Optics discounts
+            // For now, return mock response - implement when discount services have PayPal methods
+            return ResponseEntity.ok(PayPalOrderResponse.success(
+                    orderId,
+                    null, // No approval URL needed for capture
+                    "mock@optics.com",
+                    "50.00",
+                    "EUR"
+            ));
+        } catch (Exception e) {
+            log.error("Error capturing PayPal discount order for Optics: {}", e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(PayPalOrderResponse.error("optics_paypal_discount_capture_failed"));
+        }
+    }
+    
+    private ResponseEntity<PayPalOrderResponse> handleOpticsPayPalDiscountReturn(String token, String payerId) {
+        try {
+            log.info("Handling PayPal discount return for Optics: token={}, payerId={}", token, payerId);
+            // Auto-capture on return for discount payments
+            return handleOpticsPayPalDiscountCapture(token);
+        } catch (Exception e) {
+            log.error("Error handling PayPal discount return for Optics: {}", e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(PayPalOrderResponse.error("optics_paypal_discount_return_failed"));
+        }
+    }
+    
+    private ResponseEntity<PayPalOrderResponse> handleOpticsPayPalDiscountCancel(String token) {
+        try {
+            log.info("Handling PayPal discount cancel for Optics: {}", token);
+            // TODO: Mark discount order as cancelled in database
+            return ResponseEntity.ok(PayPalOrderResponse.cancelled(token));
+        } catch (Exception e) {
+            log.error("Error handling PayPal discount cancel for Optics: {}", e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(PayPalOrderResponse.error("optics_paypal_discount_cancel_failed"));
+        }
+    }
+    
+    // === NURSING PAYPAL DISCOUNT HANDLERS ===
+    
+    private ResponseEntity<PayPalOrderResponse> handleNursingPayPalDiscountOrder(PayPalCreateOrderRequest request) {
+        try {
+            log.info("Creating PayPal discount order for Nursing: {}", request.getCustomerEmail());
+            // TODO: Implement actual PayPal order creation for Nursing discounts
+            // For now, return mock response - implement when discount services have PayPal methods
+            return ResponseEntity.ok(PayPalOrderResponse.success(
+                    "MOCK_NURSING_DISCOUNT_ORDER_" + System.currentTimeMillis(),
+                    "https://www.sandbox.paypal.com/checkoutnow?token=MOCK_TOKEN",
+                    request.getCustomerEmail(),
+                    request.getAmount().toString(),
+                    request.getCurrency()
+            ));
+        } catch (Exception e) {
+            log.error("Error creating PayPal discount order for Nursing: {}", e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(PayPalOrderResponse.error("nursing_paypal_discount_order_creation_failed"));
+        }
+    }
+    
+    private ResponseEntity<PayPalOrderResponse> handleNursingPayPalDiscountCapture(String orderId) {
+        try {
+            log.info("Capturing PayPal discount order for Nursing: {}", orderId);
+            // TODO: Implement actual PayPal order capture for Nursing discounts
+            // For now, return mock response - implement when discount services have PayPal methods
+            return ResponseEntity.ok(PayPalOrderResponse.success(
+                    orderId,
+                    null, // No approval URL needed for capture
+                    "mock@nursing.com",
+                    "40.00",
+                    "EUR"
+            ));
+        } catch (Exception e) {
+            log.error("Error capturing PayPal discount order for Nursing: {}", e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(PayPalOrderResponse.error("nursing_paypal_discount_capture_failed"));
+        }
+    }
+    
+    private ResponseEntity<PayPalOrderResponse> handleNursingPayPalDiscountReturn(String token, String payerId) {
+        try {
+            log.info("Handling PayPal discount return for Nursing: token={}, payerId={}", token, payerId);
+            // Auto-capture on return for discount payments
+            return handleNursingPayPalDiscountCapture(token);
+        } catch (Exception e) {
+            log.error("Error handling PayPal discount return for Nursing: {}", e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(PayPalOrderResponse.error("nursing_paypal_discount_return_failed"));
+        }
+    }
+    
+    private ResponseEntity<PayPalOrderResponse> handleNursingPayPalDiscountCancel(String token) {
+        try {
+            log.info("Handling PayPal discount cancel for Nursing: {}", token);
+            // TODO: Mark discount order as cancelled in database
+            return ResponseEntity.ok(PayPalOrderResponse.cancelled(token));
+        } catch (Exception e) {
+            log.error("Error handling PayPal discount cancel for Nursing: {}", e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(PayPalOrderResponse.error("nursing_paypal_discount_cancel_failed"));
+        }
+    }
+    
+    // === RENEWABLE PAYPAL DISCOUNT HANDLERS ===
+    
+    private ResponseEntity<PayPalOrderResponse> handleRenewablePayPalDiscountOrder(PayPalCreateOrderRequest request) {
+        try {
+            log.info("Creating PayPal discount order for Renewable: {}", request.getCustomerEmail());
+            // TODO: Implement actual PayPal order creation for Renewable discounts
+            // For now, return mock response - implement when discount services have PayPal methods
+            return ResponseEntity.ok(PayPalOrderResponse.success(
+                    "MOCK_RENEWABLE_DISCOUNT_ORDER_" + System.currentTimeMillis(),
+                    "https://www.sandbox.paypal.com/checkoutnow?token=MOCK_TOKEN",
+                    request.getCustomerEmail(),
+                    request.getAmount().toString(),
+                    request.getCurrency()
+            ));
+        } catch (Exception e) {
+            log.error("Error creating PayPal discount order for Renewable: {}", e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(PayPalOrderResponse.error("renewable_paypal_discount_order_creation_failed"));
+        }
+    }
+    
+    private ResponseEntity<PayPalOrderResponse> handleRenewablePayPalDiscountCapture(String orderId) {
+        try {
+            log.info("Capturing PayPal discount order for Renewable: {}", orderId);
+            // TODO: Implement actual PayPal order capture for Renewable discounts
+            // For now, return mock response - implement when discount services have PayPal methods
+            return ResponseEntity.ok(PayPalOrderResponse.success(
+                    orderId,
+                    null, // No approval URL needed for capture
+                    "mock@renewable.com",
+                    "35.00",
+                    "EUR"
+            ));
+        } catch (Exception e) {
+            log.error("Error capturing PayPal discount order for Renewable: {}", e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(PayPalOrderResponse.error("renewable_paypal_discount_capture_failed"));
+        }
+    }
+    
+    private ResponseEntity<PayPalOrderResponse> handleRenewablePayPalDiscountReturn(String token, String payerId) {
+        try {
+            log.info("Handling PayPal discount return for Renewable: token={}, payerId={}", token, payerId);
+            // Auto-capture on return for discount payments
+            return handleRenewablePayPalDiscountCapture(token);
+        } catch (Exception e) {
+            log.error("Error handling PayPal discount return for Renewable: {}", e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(PayPalOrderResponse.error("renewable_paypal_discount_return_failed"));
+        }
+    }
+    
+    private ResponseEntity<PayPalOrderResponse> handleRenewablePayPalDiscountCancel(String token) {
+        try {
+            log.info("Handling PayPal discount cancel for Renewable: {}", token);
+            // TODO: Mark discount order as cancelled in database
+            return ResponseEntity.ok(PayPalOrderResponse.cancelled(token));
+        } catch (Exception e) {
+            log.error("Error handling PayPal discount cancel for Renewable: {}", e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(PayPalOrderResponse.error("renewable_paypal_discount_cancel_failed"));
+        }
+    }
+    
+    // === POLYMERS PAYPAL DISCOUNT HANDLERS ===
+    
+    private ResponseEntity<PayPalOrderResponse> handlePolymersPayPalDiscountOrder(PayPalCreateOrderRequest request) {
+        try {
+            log.info("Creating PayPal discount order for Polymers: {}", request.getCustomerEmail());
+            // TODO: Implement actual PayPal order creation for Polymers discounts
+            // For now, return mock response - implement when discount services have PayPal methods
+            return ResponseEntity.ok(PayPalOrderResponse.success(
+                    "MOCK_POLYMERS_DISCOUNT_ORDER_" + System.currentTimeMillis(),
+                    "https://www.sandbox.paypal.com/checkoutnow?token=MOCK_TOKEN",
+                    request.getCustomerEmail(),
+                    request.getAmount().toString(),
+                    request.getCurrency()
+            ));
+        } catch (Exception e) {
+            log.error("Error creating PayPal discount order for Polymers: {}", e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(PayPalOrderResponse.error("polymers_paypal_discount_order_creation_failed"));
+        }
+    }
+    
+    private ResponseEntity<PayPalOrderResponse> handlePolymersPayPalDiscountCapture(String orderId) {
+        try {
+            log.info("Capturing PayPal discount order for Polymers: {}", orderId);
+            // TODO: Implement actual PayPal order capture for Polymers discounts
+            // For now, return mock response - implement when discount services have PayPal methods
+            return ResponseEntity.ok(PayPalOrderResponse.success(
+                    orderId,
+                    null, // No approval URL needed for capture
+                    "mock@polymers.com",
+                    "60.00",
+                    "EUR"
+            ));
+        } catch (Exception e) {
+            log.error("Error capturing PayPal discount order for Polymers: {}", e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(PayPalOrderResponse.error("polymers_paypal_discount_capture_failed"));
+        }
+    }
+    
+    private ResponseEntity<PayPalOrderResponse> handlePolymersPayPalDiscountReturn(String token, String payerId) {
+        try {
+            log.info("Handling PayPal discount return for Polymers: token={}, payerId={}", token, payerId);
+            // Auto-capture on return for discount payments
+            return handlePolymersPayPalDiscountCapture(token);
+        } catch (Exception e) {
+            log.error("Error handling PayPal discount return for Polymers: {}", e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(PayPalOrderResponse.error("polymers_paypal_discount_return_failed"));
+        }
+    }
+    
+    private ResponseEntity<PayPalOrderResponse> handlePolymersPayPalDiscountCancel(String token) {
+        try {
+            log.info("Handling PayPal discount cancel for Polymers: {}", token);
+            // TODO: Mark discount order as cancelled in database
+            return ResponseEntity.ok(PayPalOrderResponse.cancelled(token));
+        } catch (Exception e) {
+            log.error("Error handling PayPal discount cancel for Polymers: {}", e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(PayPalOrderResponse.error("polymers_paypal_discount_cancel_failed"));
+        }
+    }
+    
+    // === HELPER METHODS ===
+    
+    /**
+     * Try all discount services to find and capture a PayPal order when origin is unknown
+     */
+    private ResponseEntity<PayPalOrderResponse> tryAllDiscountServicesForCapture(String orderId) {
+        log.info("Trying all discount services to capture PayPal order: {}", orderId);
+        
+        // Try Optics first
+        try {
+            return handleOpticsPayPalDiscountCapture(orderId);
+        } catch (Exception e1) {
+            log.warn("Optics discount service couldn't capture PayPal order: {}", e1.getMessage());
+            
+            // Try Nursing
+            try {
+                return handleNursingPayPalDiscountCapture(orderId);
+            } catch (Exception e2) {
+                log.warn("Nursing discount service couldn't capture PayPal order: {}", e2.getMessage());
+                
+                // Try Renewable
+                try {
+                    return handleRenewablePayPalDiscountCapture(orderId);
+                } catch (Exception e3) {
+                    log.warn("Renewable discount service couldn't capture PayPal order: {}", e3.getMessage());
+                    
+                    // Try Polymers
+                    try {
+                        return handlePolymersPayPalDiscountCapture(orderId);
+                    } catch (Exception e4) {
+                        log.error("No discount service could capture PayPal order: {}", orderId);
+                        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                                .body(PayPalOrderResponse.error("paypal_discount_order_not_found"));
+                    }
+                }
+            }
         }
     }
 

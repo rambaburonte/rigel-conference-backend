@@ -46,4 +46,15 @@ public class PayPalOrderResponse {
                 .paymentStatus("failed")
                 .build();
     }
+    
+    public static PayPalOrderResponse cancelled(String orderId) {
+        return PayPalOrderResponse.builder()
+                .orderId(orderId)
+                .status("CANCELLED")
+                .provider("PAYPAL")
+                .paymentStatus("cancelled")
+                .success(false)
+                .errorMessage("Payment cancelled by user")
+                .build();
+    }
 }
