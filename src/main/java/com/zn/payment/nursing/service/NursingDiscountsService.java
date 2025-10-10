@@ -699,10 +699,11 @@ public class NursingDiscountsService {
     // ===== PAYPAL INTEGRATION FOR NURSING DISCOUNTS =====
 
     /**
-     * Create PayPal order for Nursing discount payments
+     * Create PayPal order for Nursing discount payments - PRODUCTION LEVEL
+     * Following the same pattern as regular payments in NursingStripeService
      */
     public PayPalOrderResponse createPayPalOrder(PayPalCreateOrderRequest request) {
-        log.info("Creating PayPal order for Nursing discount - Amount: {} {}, Customer: {}", 
+        log.info("Creating PayPal discount order for Nursing - Amount: {} {}, Customer: {}", 
                 request.getAmount(), request.getCurrency(), request.getCustomerEmail());
         
         try {
@@ -722,7 +723,7 @@ public class NursingDiscountsService {
             String paypalOrderId = orderResult.getOrderId();
             String approvalUrl = orderResult.getApprovalUrl();
             
-            // Create discount record with PayPal's actual order ID
+            // Create discount record with PayPal's actual order ID and all form data
             NursingDiscounts discountRecord = new NursingDiscounts();
             discountRecord.setSessionId(paypalOrderId); // Store PayPal's actual order ID
             discountRecord.setName(request.getCustomerName() != null ? request.getCustomerName() : "");
@@ -758,7 +759,8 @@ public class NursingDiscountsService {
     }
 
     /**
-     * Create PayPal order via PayPal SDK for discount payments
+     * Create PayPal order via PayPal SDK for discount payments - PRODUCTION READY
+     * Following exact same pattern as regular payments
      */
     private PayPalOrderResult createPayPalOrderAPI(PayPalCreateOrderRequest request) {
         try {
@@ -845,9 +847,14 @@ public class NursingDiscountsService {
             
             log.info("✅ PayPal discount order captured successfully: {} with status: {}", order.id(), order.status());
             
-            // Update discount record
+            // Find discount record
+            log.info("🔍 Searching for Nursing discount record with sessionId: {}", orderId);
             NursingDiscounts discountRecord = discountsRepository.findBySessionId(orderId);
+            
             if (discountRecord != null) {
+                log.info("✅ Found Nursing discount record with ID: {} for customer: {}", 
+                        discountRecord.getId(), discountRecord.getCustomerEmail());
+                        
                 discountRecord.setStatus(PaymentStatus.COMPLETED);
                 discountRecord.setPaymentStatus("paid");
                 discountRecord.setUpdatedAt(java.time.LocalDateTime.now());
@@ -867,9 +874,29 @@ public class NursingDiscountsService {
                 }
                 
                 discountsRepository.save(discountRecord);
-                log.info("✅ Updated Nursing discount record status to COMPLETED for PayPal order: {}", orderId);
+                log.info("✅ Successfully updated Nursing discount record status to COMPLETED for PayPal order: {}", orderId);
+                
             } else {
                 log.warn("⚠️ No Nursing discount record found for PayPal order: {}", orderId);
+                
+                // Try alternative search strategies
+                log.info("🔍 Attempting alternative search for discount record...");
+                
+                // Search by payment intent ID (maybe it was stored differently)
+                java.util.List<NursingDiscounts> allDiscounts = discountsRepository.findAll();
+                log.info("🔍 Found {} total discount records in database", allDiscounts.size());
+                
+                // Log recent discount records for debugging
+                for (NursingDiscounts discount : allDiscounts) {
+                    if (discount.getCreatedAt().isAfter(java.time.LocalDateTime.now().minusHours(1))) {
+                        log.info("🔍 Recent discount record: ID={}, sessionId={}, email={}, status={}, created={}", 
+                                discount.getId(), 
+                                discount.getSessionId(), 
+                                discount.getCustomerEmail(),
+                                discount.getStatus(),
+                                discount.getCreatedAt());
+                    }
+                }
             }
             
             return PayPalOrderResponse.success(
