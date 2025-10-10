@@ -577,6 +577,31 @@ public class RenewaleStripeService {
             );
 
             paymentRecordRepository.save(record);
+            
+            // ✅ CRITICAL: Link payment record to existing registration form if available
+            try {
+                RenewableRegistrationForm existingRegistration = 
+                    registrationFormRepository.findTopByEmailOrderByIdDesc(request.getEmail());
+                
+                if (existingRegistration != null && existingRegistration.getPaymentRecord() == null) {
+                    log.info("🔗 Linking existing Renewable registration form ID: {} to payment record ID: {}", 
+                            existingRegistration.getId(), record.getId());
+                    
+                    // Establish bidirectional relationship
+                    existingRegistration.setPaymentRecord(record);
+                    record.setRegistrationForm(existingRegistration);
+                    
+                    // Save both entities
+                    registrationFormRepository.save(existingRegistration);
+                    paymentRecordRepository.save(record);
+                    
+                    log.info("✅ Successfully linked Renewable registration form ID: {} to payment record ID: {}", 
+                            existingRegistration.getId(), record.getId());
+                }
+            } catch (Exception e) {
+                log.error("❌ Error linking Renewable registration form to payment record: {}", e.getMessage());
+            }
+            
             log.info("💾 Saved PaymentRecord for session: {} with pricing config: {}", 
                     session.getId(), pricingConfig.getId());
 
@@ -1880,15 +1905,16 @@ public class RenewaleStripeService {
                 log.info("✅ Created new Renewable registration form with ID: {}", registrationForm.getId());
             }
 
-            // Generate internal order ID for tracking
-            String internalOrderId = "RENEWABLE_PAYPAL_" + System.currentTimeMillis() + "_" + registrationForm.getId();
+            // Create PayPal order via SDK - this will return the actual PayPal order ID and approval URL
+            PayPalOrderResult orderResult = createPayPalOrderAPI(request, registrationForm.getId());
             
-            // Create PayPal order via SDK - this will return the actual PayPal order ID
-            String approvalUrl = createPayPalOrderAPI(request, internalOrderId);
+            // Use PayPal's actual order ID instead of custom internal ID
+            String paypalOrderId = orderResult.getOrderId();
+            String approvalUrl = orderResult.getApprovalUrl();
             
-            // Create payment record with internal order ID
+            // Create payment record with PayPal's actual order ID
             RenewablePaymentRecord paymentRecord = RenewablePaymentRecord.builder()
-                    .sessionId(internalOrderId) // Store internal ID for now
+                    .sessionId(paypalOrderId) // Store PayPal's actual order ID
                     .customerEmail(request.getCustomerEmail())
                     .amountTotal(request.getAmount())
                     .currency(request.getCurrency() != null ? request.getCurrency().toUpperCase() : "EUR")
@@ -1906,13 +1932,20 @@ public class RenewaleStripeService {
             
             // Save payment record
             RenewablePaymentRecord savedRecord = paymentRecordRepository.save(paymentRecord);
-            log.info("💾 Saved Renewable PayPal payment record with ID: {} for internal order: {}", 
-                    savedRecord.getId(), internalOrderId);
             
-            log.info("✅ Created PayPal order for Renewable: {} with approval URL: {}", internalOrderId, approvalUrl);
+            // ✅ CRITICAL: Establish bidirectional relationship
+            registrationForm.setPaymentRecord(savedRecord);
+            registrationFormRepository.save(registrationForm);
+            
+            log.info("💾 Saved Renewable PayPal payment record with ID: {} for PayPal order: {}", 
+                    savedRecord.getId(), paypalOrderId);
+            log.info("🔗 Linked Renewable registration form ID: {} to payment record ID: {}", 
+                    registrationForm.getId(), savedRecord.getId());
+            
+            log.info("✅ Created PayPal order for Renewable: {} with approval URL: {}", paypalOrderId, approvalUrl);
             
             return com.zn.payment.dto.PayPalOrderResponse.success(
-                    internalOrderId, 
+                    paypalOrderId, 
                     approvalUrl, 
                     request.getCustomerEmail(),
                     request.getAmount().toString(),
@@ -1926,11 +1959,12 @@ public class RenewaleStripeService {
     }
 
     /**
-     * Create PayPal order via PayPal SDK - PRODUCTION READY
+     * Create PayPal order via PayPal SDK for Renewable
+     * Returns PayPal order result with order ID and approval URL - PRODUCTION READY
      */
-    private String createPayPalOrderAPI(com.zn.payment.dto.PayPalCreateOrderRequest request, String orderId) {
+    private PayPalOrderResult createPayPalOrderAPI(com.zn.payment.dto.PayPalCreateOrderRequest request, Long registrationFormId) {
         try {
-            log.info("🚀 Creating real PayPal order via SDK for Renewable order: {}", orderId);
+            log.info("🚀 Creating real PayPal order via SDK for Renewable registration form: {}", registrationFormId);
             
             // Build PayPal order request using SDK
             OrderRequest orderRequest = new OrderRequest();
@@ -1938,8 +1972,8 @@ public class RenewaleStripeService {
             
             // Set application context
             ApplicationContext applicationContext = new ApplicationContext()
-                .returnUrl(request.getSuccessUrl() + "?paymentMethod=paypal&token=" + orderId)
-                .cancelUrl(request.getCancelUrl() + "?paymentMethod=paypal&cancelled=true&token=" + orderId)
+                .returnUrl(request.getSuccessUrl() + "?paymentMethod=paypal")
+                .cancelUrl(request.getCancelUrl() + "?paymentMethod=paypal&cancelled=true")
                 .brandName("Global Renewable Energy Summit 2026")
                 .landingPage("BILLING")
                 .userAction("PAY_NOW");
@@ -1955,9 +1989,9 @@ public class RenewaleStripeService {
                 .value(request.getAmount().toString());
             
             PurchaseUnitRequest purchaseUnitRequest = new PurchaseUnitRequest()
-                .referenceId(orderId)
+                .referenceId("REG_" + registrationFormId)
                 .description("Global Renewable Energy Summit 2026 Registration - " + request.getCustomerEmail())
-                .customId(orderId)
+                .customId("RENEWABLE_REG_" + registrationFormId)
                 .softDescriptor("RENEWSUMMIT")
                 .amountWithBreakdown(amountBreakdown);
             
@@ -1988,11 +2022,33 @@ public class RenewaleStripeService {
             }
             
             log.info("🔗 PayPal approval URL generated for Renewable: {}", approvalUrl);
-            return approvalUrl;
+            
+            return new PayPalOrderResult(order.id(), approvalUrl);
             
         } catch (Exception e) {
             log.error("❌ Error creating PayPal order via SDK for Renewable: {}", e.getMessage(), e);
             throw new RuntimeException("PayPal SDK error: " + e.getMessage(), e);
+        }
+    }
+    
+    /**
+     * Helper class to return both PayPal order ID and approval URL
+     */
+    private static class PayPalOrderResult {
+        private final String orderId;
+        private final String approvalUrl;
+        
+        public PayPalOrderResult(String orderId, String approvalUrl) {
+            this.orderId = orderId;
+            this.approvalUrl = approvalUrl;
+        }
+        
+        public String getOrderId() {
+            return orderId;
+        }
+        
+        public String getApprovalUrl() {
+            return approvalUrl;
         }
     }
     

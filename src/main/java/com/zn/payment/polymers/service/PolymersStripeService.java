@@ -6,6 +6,7 @@ import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -15,6 +16,19 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.paypal.core.PayPalEnvironment;
+import com.paypal.core.PayPalHttpClient;
+import com.paypal.http.HttpResponse;
+import com.paypal.orders.AmountWithBreakdown;
+import com.paypal.orders.ApplicationContext;
+import com.paypal.orders.Capture;
+import com.paypal.orders.LinkDescription;
+import com.paypal.orders.Order;
+import com.paypal.orders.OrderRequest;
+import com.paypal.orders.OrdersCaptureRequest;
+import com.paypal.orders.OrdersCreateRequest;
+import com.paypal.orders.PurchaseUnit;
+import com.paypal.orders.PurchaseUnitRequest;
 import com.stripe.Stripe;
 import com.stripe.exception.SignatureVerificationException;
 import com.stripe.exception.StripeException;
@@ -23,13 +37,6 @@ import com.stripe.model.EventDataObjectDeserializer;
 import com.stripe.model.checkout.Session;
 import com.stripe.net.Webhook;
 import com.stripe.param.checkout.SessionCreateParams;
-
-// PayPal SDK imports
-import com.paypal.core.PayPalEnvironment;
-import com.paypal.core.PayPalHttpClient;
-import com.paypal.http.HttpResponse;
-import com.paypal.orders.*;
-import java.util.ArrayList;
 import com.zn.payment.dto.CheckoutRequest;
 import com.zn.payment.polymers.dto.PolymersPaymentResponseDTO;
 import com.zn.payment.polymers.entity.PolymersPaymentRecord;
@@ -415,6 +422,31 @@ public class PolymersStripeService {
         );
 
         paymentRecordRepository.save(record);
+        
+        // ✅ CRITICAL: Link payment record to existing registration form if available
+        try {
+            PolymersRegistrationForm existingRegistration = 
+                registrationFormRepository.findTopByEmailOrderByIdDesc(request.getEmail());
+            
+            if (existingRegistration != null && existingRegistration.getPaymentRecord() == null) {
+                log.info("🔗 Linking existing Polymers registration form ID: {} to payment record ID: {}", 
+                        existingRegistration.getId(), record.getId());
+                
+                // Establish bidirectional relationship
+                existingRegistration.setPaymentRecord(record);
+                record.setRegistrationForm(existingRegistration);
+                
+                // Save both entities
+                registrationFormRepository.save(existingRegistration);
+                paymentRecordRepository.save(record);
+                
+                log.info("✅ Successfully linked Polymers registration form ID: {} to payment record ID: {}", 
+                        existingRegistration.getId(), record.getId());
+            }
+        } catch (Exception e) {
+            log.error("❌ Error linking Polymers registration form to payment record: {}", e.getMessage());
+        }
+        
         log.info("💾 Payment record created in PolymersPaymentRecord table for session: {} with PolymersPricingConfig: {}. No discount record created.", 
                 session.getId(), pricingConfig.getId());
 
@@ -1650,15 +1682,16 @@ public PolymersPaymentResponseDTO retrieveSession(String sessionId) throws Strip
                 log.info("✅ Created new Polymers registration form with ID: {}", registrationForm.getId());
             }
 
-            // Generate internal order ID for tracking
-            String internalOrderId = "POLYMERS_PAYPAL_" + System.currentTimeMillis() + "_" + registrationForm.getId();
+            // Create PayPal order via SDK - this will return the actual PayPal order ID and approval URL
+            PayPalOrderResult orderResult = createPayPalOrderAPI(request, registrationForm.getId());
             
-            // Create PayPal order via SDK - this will return the actual PayPal order ID
-            String approvalUrl = createPayPalOrderAPI(request, internalOrderId);
+            // Use PayPal's actual order ID instead of custom internal ID
+            String paypalOrderId = orderResult.getOrderId();
+            String approvalUrl = orderResult.getApprovalUrl();
             
-            // Create payment record with internal order ID
+            // Create payment record with PayPal's actual order ID
             PolymersPaymentRecord paymentRecord = PolymersPaymentRecord.builder()
-                    .sessionId(internalOrderId) // Store internal ID for now
+                    .sessionId(paypalOrderId) // Store PayPal's actual order ID
                     .customerEmail(request.getCustomerEmail())
                     .amountTotal(request.getAmount())
                     .currency(request.getCurrency() != null ? request.getCurrency().toUpperCase() : "EUR")
@@ -1676,13 +1709,20 @@ public PolymersPaymentResponseDTO retrieveSession(String sessionId) throws Strip
             
             // Save payment record
             PolymersPaymentRecord savedRecord = paymentRecordRepository.save(paymentRecord);
-            log.info("💾 Saved Polymers PayPal payment record with ID: {} for internal order: {}", 
-                    savedRecord.getId(), internalOrderId);
             
-            log.info("✅ Created PayPal order for Polymers: {} with approval URL: {}", internalOrderId, approvalUrl);
+            // ✅ CRITICAL: Establish bidirectional relationship
+            registrationForm.setPaymentRecord(savedRecord);
+            registrationFormRepository.save(registrationForm);
+            
+            log.info("💾 Saved Polymers PayPal payment record with ID: {} for PayPal order: {}", 
+                    savedRecord.getId(), paypalOrderId);
+            log.info("🔗 Linked Polymers registration form ID: {} to payment record ID: {}", 
+                    registrationForm.getId(), savedRecord.getId());
+            
+            log.info("✅ Created PayPal order for Polymers: {} with approval URL: {}", paypalOrderId, approvalUrl);
             
             return com.zn.payment.dto.PayPalOrderResponse.success(
-                    internalOrderId, 
+                    paypalOrderId, 
                     approvalUrl, 
                     request.getCustomerEmail(),
                     request.getAmount().toString(),
@@ -1696,11 +1736,12 @@ public PolymersPaymentResponseDTO retrieveSession(String sessionId) throws Strip
     }
 
     /**
-     * Create PayPal order via PayPal SDK - PRODUCTION READY
+     * Create PayPal order via PayPal SDK for Polymers
+     * Returns PayPal order result with order ID and approval URL - PRODUCTION READY
      */
-    private String createPayPalOrderAPI(com.zn.payment.dto.PayPalCreateOrderRequest request, String orderId) {
+    private PayPalOrderResult createPayPalOrderAPI(com.zn.payment.dto.PayPalCreateOrderRequest request, Long registrationFormId) {
         try {
-            log.info("🚀 Creating real PayPal order via SDK for Polymers order: {}", orderId);
+            log.info("🚀 Creating real PayPal order via SDK for Polymers registration form: {}", registrationFormId);
             
             // Build PayPal order request using SDK
             OrderRequest orderRequest = new OrderRequest();
@@ -1708,8 +1749,8 @@ public PolymersPaymentResponseDTO retrieveSession(String sessionId) throws Strip
             
             // Set application context
             ApplicationContext applicationContext = new ApplicationContext()
-                .returnUrl(request.getSuccessUrl() + "?paymentMethod=paypal&token=" + orderId)
-                .cancelUrl(request.getCancelUrl() + "?paymentMethod=paypal&cancelled=true&token=" + orderId)
+                .returnUrl(request.getSuccessUrl() + "?paymentMethod=paypal")
+                .cancelUrl(request.getCancelUrl() + "?paymentMethod=paypal&cancelled=true")
                 .brandName("Polymers Science Conference 2026")
                 .landingPage("BILLING")
                 .userAction("PAY_NOW");
@@ -1725,9 +1766,9 @@ public PolymersPaymentResponseDTO retrieveSession(String sessionId) throws Strip
                 .value(request.getAmount().toString());
             
             PurchaseUnitRequest purchaseUnitRequest = new PurchaseUnitRequest()
-                .referenceId(orderId)
+                .referenceId("REG_" + registrationFormId)
                 .description("Polymers Science Conference 2026 Registration - " + request.getCustomerEmail())
-                .customId(orderId)
+                .customId("POLYMERS_REG_" + registrationFormId)
                 .softDescriptor("POLYMERSCONF")
                 .amountWithBreakdown(amountBreakdown);
             
@@ -1758,11 +1799,33 @@ public PolymersPaymentResponseDTO retrieveSession(String sessionId) throws Strip
             }
             
             log.info("🔗 PayPal approval URL generated for Polymers: {}", approvalUrl);
-            return approvalUrl;
+            
+            return new PayPalOrderResult(order.id(), approvalUrl);
             
         } catch (Exception e) {
             log.error("❌ Error creating PayPal order via SDK for Polymers: {}", e.getMessage(), e);
             throw new RuntimeException("PayPal SDK error: " + e.getMessage(), e);
+        }
+    }
+    
+    /**
+     * Helper class to return both PayPal order ID and approval URL
+     */
+    private static class PayPalOrderResult {
+        private final String orderId;
+        private final String approvalUrl;
+        
+        public PayPalOrderResult(String orderId, String approvalUrl) {
+            this.orderId = orderId;
+            this.approvalUrl = approvalUrl;
+        }
+        
+        public String getOrderId() {
+            return orderId;
+        }
+        
+        public String getApprovalUrl() {
+            return approvalUrl;
         }
     }
     

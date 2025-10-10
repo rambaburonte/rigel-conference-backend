@@ -6,6 +6,7 @@ import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -15,6 +16,19 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.paypal.core.PayPalEnvironment;
+import com.paypal.core.PayPalHttpClient;
+import com.paypal.http.HttpResponse;
+import com.paypal.orders.AmountWithBreakdown;
+import com.paypal.orders.ApplicationContext;
+import com.paypal.orders.Capture;
+import com.paypal.orders.LinkDescription;
+import com.paypal.orders.Order;
+import com.paypal.orders.OrderRequest;
+import com.paypal.orders.OrdersCaptureRequest;
+import com.paypal.orders.OrdersCreateRequest;
+import com.paypal.orders.PurchaseUnit;
+import com.paypal.orders.PurchaseUnitRequest;
 import com.stripe.Stripe;
 import com.stripe.exception.SignatureVerificationException;
 import com.stripe.exception.StripeException;
@@ -23,13 +37,6 @@ import com.stripe.model.EventDataObjectDeserializer;
 import com.stripe.model.checkout.Session;
 import com.stripe.net.Webhook;
 import com.stripe.param.checkout.SessionCreateParams;
-
-// PayPal SDK imports
-import com.paypal.core.PayPalEnvironment;
-import com.paypal.core.PayPalHttpClient;
-import com.paypal.http.HttpResponse;
-import com.paypal.orders.*;
-import java.util.ArrayList;
 import com.zn.optics.entity.OpticsPricingConfig;
 import com.zn.optics.entity.OpticsRegistrationForm;
 import com.zn.optics.repository.IOpricsRegistrationFormRepository;
@@ -575,6 +582,31 @@ public class OpticsStripeService {
             );
 
             paymentRecordRepository.save(record);
+            
+            // ✅ CRITICAL: Link payment record to existing registration form if available
+            try {
+                OpticsRegistrationForm existingRegistration = 
+                    registrationFormRepository.findTopByEmailOrderByIdDesc(request.getEmail());
+                
+                if (existingRegistration != null && existingRegistration.getPaymentRecord() == null) {
+                    log.info("🔗 Linking existing Optics registration form ID: {} to payment record ID: {}", 
+                            existingRegistration.getId(), record.getId());
+                    
+                    // Establish bidirectional relationship
+                    existingRegistration.setPaymentRecord(record);
+                    record.setRegistrationForm(existingRegistration);
+                    
+                    // Save both entities
+                    registrationFormRepository.save(existingRegistration);
+                    paymentRecordRepository.save(record);
+                    
+                    log.info("✅ Successfully linked Optics registration form ID: {} to payment record ID: {}", 
+                            existingRegistration.getId(), record.getId());
+                }
+            } catch (Exception e) {
+                log.error("❌ Error linking Optics registration form to payment record: {}", e.getMessage());
+            }
+            
             // update the status in DiscountsRepository
             log.info("💾 Saved PaymentRecord for session: {} with pricing config: {}", 
                     session.getId(), pricingConfig.getId());
@@ -1917,15 +1949,16 @@ public class OpticsStripeService {
                 log.info("✅ Created new Optics registration form with ID: {}", registrationForm.getId());
             }
 
-            // Generate internal order ID for tracking
-            String internalOrderId = "OPTICS_PAYPAL_" + System.currentTimeMillis() + "_" + registrationForm.getId();
+            // Create PayPal order via SDK - this will return the actual PayPal order ID and approval URL
+            PayPalOrderResult orderResult = createPayPalOrderAPI(request, registrationForm.getId());
             
-            // Create PayPal order via SDK - this will return the actual PayPal order ID
-            String approvalUrl = createPayPalOrderAPI(request, internalOrderId);
+            // Use PayPal's actual order ID instead of custom internal ID
+            String paypalOrderId = orderResult.getOrderId();
+            String approvalUrl = orderResult.getApprovalUrl();
             
-            // Create payment record with internal order ID
+            // Create payment record with PayPal's actual order ID
             OpticsPaymentRecord paymentRecord = OpticsPaymentRecord.builder()
-                    .sessionId(internalOrderId) // Store internal ID for now
+                    .sessionId(paypalOrderId) // Store PayPal's actual order ID
                     .customerEmail(request.getCustomerEmail())
                     .amountTotal(request.getAmount())
                     .currency(request.getCurrency() != null ? request.getCurrency().toUpperCase() : "EUR")
@@ -1943,13 +1976,20 @@ public class OpticsStripeService {
             
             // Save payment record
             OpticsPaymentRecord savedRecord = paymentRecordRepository.save(paymentRecord);
-            log.info("💾 Saved Optics PayPal payment record with ID: {} for internal order: {}", 
-                    savedRecord.getId(), internalOrderId);
             
-            log.info("✅ Created PayPal order for Optics: {} with approval URL: {}", internalOrderId, approvalUrl);
+            // ✅ CRITICAL: Establish bidirectional relationship
+            registrationForm.setPaymentRecord(savedRecord);
+            registrationFormRepository.save(registrationForm);
+            
+            log.info("💾 Saved Optics PayPal payment record with ID: {} for PayPal order: {}", 
+                    savedRecord.getId(), paypalOrderId);
+            log.info("🔗 Linked Optics registration form ID: {} to payment record ID: {}", 
+                    registrationForm.getId(), savedRecord.getId());
+            
+            log.info("✅ Created PayPal order for Optics: {} with approval URL: {}", paypalOrderId, approvalUrl);
             
             return com.zn.payment.dto.PayPalOrderResponse.success(
-                    internalOrderId, 
+                    paypalOrderId, 
                     approvalUrl, 
                     request.getCustomerEmail(),
                     request.getAmount().toString(),
@@ -1963,11 +2003,12 @@ public class OpticsStripeService {
     }
 
     /**
-     * Create PayPal order via PayPal SDK - PRODUCTION READY
+     * Create PayPal order via PayPal SDK for Optics
+     * Returns PayPal order result with order ID and approval URL - PRODUCTION READY
      */
-    private String createPayPalOrderAPI(com.zn.payment.dto.PayPalCreateOrderRequest request, String orderId) {
+    private PayPalOrderResult createPayPalOrderAPI(com.zn.payment.dto.PayPalCreateOrderRequest request, Long registrationFormId) {
         try {
-            log.info("🚀 Creating real PayPal order via SDK for Optics order: {}", orderId);
+            log.info("🚀 Creating real PayPal order via SDK for Optics registration form: {}", registrationFormId);
             
             // Build PayPal order request using SDK
             OrderRequest orderRequest = new OrderRequest();
@@ -1975,8 +2016,8 @@ public class OpticsStripeService {
             
             // Set application context
             ApplicationContext applicationContext = new ApplicationContext()
-                .returnUrl(request.getSuccessUrl() + "?paymentMethod=paypal&token=" + orderId)
-                .cancelUrl(request.getCancelUrl() + "?paymentMethod=paypal&cancelled=true&token=" + orderId)
+                .returnUrl(request.getSuccessUrl() + "?paymentMethod=paypal")
+                .cancelUrl(request.getCancelUrl() + "?paymentMethod=paypal&cancelled=true")
                 .brandName("Global Optics Summit 2026")
                 .landingPage("BILLING")
                 .userAction("PAY_NOW");
@@ -1992,9 +2033,9 @@ public class OpticsStripeService {
                 .value(request.getAmount().toString());
             
             PurchaseUnitRequest purchaseUnitRequest = new PurchaseUnitRequest()
-                .referenceId(orderId)
+                .referenceId("REG_" + registrationFormId)
                 .description("Global Optics Summit 2026 Registration - " + request.getCustomerEmail())
-                .customId(orderId)
+                .customId("OPTICS_REG_" + registrationFormId)
                 .softDescriptor("OPTICSSUMMIT")
                 .amountWithBreakdown(amountBreakdown);
             
@@ -2025,11 +2066,33 @@ public class OpticsStripeService {
             }
             
             log.info("🔗 PayPal approval URL generated for Optics: {}", approvalUrl);
-            return approvalUrl;
+            
+            return new PayPalOrderResult(order.id(), approvalUrl);
             
         } catch (Exception e) {
             log.error("❌ Error creating PayPal order via SDK for Optics: {}", e.getMessage(), e);
             throw new RuntimeException("PayPal SDK error: " + e.getMessage(), e);
+        }
+    }
+    
+    /**
+     * Helper class to return both PayPal order ID and approval URL
+     */
+    private static class PayPalOrderResult {
+        private final String orderId;
+        private final String approvalUrl;
+        
+        public PayPalOrderResult(String orderId, String approvalUrl) {
+            this.orderId = orderId;
+            this.approvalUrl = approvalUrl;
+        }
+        
+        public String getOrderId() {
+            return orderId;
+        }
+        
+        public String getApprovalUrl() {
+            return approvalUrl;
         }
     }
     
