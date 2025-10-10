@@ -845,16 +845,15 @@ public class DiscountsController {
     private ResponseEntity<PayPalOrderResponse> handleOpticsPayPalDiscountOrder(PayPalCreateOrderRequest request) {
         try {
             log.info("Creating PayPal discount order for Optics: {}", request.getCustomerEmail());
-            // TODO: Implement actual PayPal order creation for Optics discounts
-            // For now, return mock response - implement when OpticsDiscountsService has PayPal methods
-            log.warn("⚠️ Using mock PayPal response for Optics discounts - implement real PayPal integration");
-            return ResponseEntity.ok(PayPalOrderResponse.success(
-                    "MOCK_OPTICS_DISCOUNT_ORDER_" + System.currentTimeMillis(),
-                    "https://www.sandbox.paypal.com/checkoutnow?token=MOCK_TOKEN",
-                    request.getCustomerEmail(),
-                    request.getAmount().toString(),
-                    request.getCurrency()
-            ));
+            
+            // ✅ PRODUCTION LEVEL: Use real PayPal integration from OpticsDiscountsService
+            PayPalOrderResponse response = opticsDiscountsService.createPayPalOrder(request);
+            
+            if (response.isSuccess()) {
+                return ResponseEntity.ok(response);
+            } else {
+                return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(response);
+            }
         } catch (Exception e) {
             log.error("Error creating PayPal discount order for Optics: {}", e.getMessage(), e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
@@ -865,16 +864,15 @@ public class DiscountsController {
     private ResponseEntity<PayPalOrderResponse> handleOpticsPayPalDiscountCapture(String orderId) {
         try {
             log.info("Capturing PayPal discount order for Optics: {}", orderId);
-            // TODO: Implement actual PayPal order capture for Optics discounts
-            // For now, return mock response - implement when OpticsDiscountsService has PayPal methods
-            log.warn("⚠️ Using mock PayPal capture response for Optics discounts - implement real PayPal integration");
-            return ResponseEntity.ok(PayPalOrderResponse.success(
-                    orderId,
-                    null, // No approval URL needed for capture
-                    "mock@optics.com",
-                    "50.00",
-                    "EUR"
-            ));
+            
+            // ✅ PRODUCTION LEVEL: Use real PayPal integration from OpticsDiscountsService
+            PayPalOrderResponse response = opticsDiscountsService.capturePayPalOrder(orderId);
+            
+            if (response.isSuccess()) {
+                return ResponseEntity.ok(response);
+            } else {
+                return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(response);
+            }
         } catch (Exception e) {
             log.error("Error capturing PayPal discount order for Optics: {}", e.getMessage(), e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
@@ -979,16 +977,15 @@ public class DiscountsController {
     private ResponseEntity<PayPalOrderResponse> handleRenewablePayPalDiscountOrder(PayPalCreateOrderRequest request) {
         try {
             log.info("Creating PayPal discount order for Renewable: {}", request.getCustomerEmail());
-            // TODO: Implement actual PayPal order creation for Renewable discounts
-            // For now, return mock response - implement when RenewableDiscountsService has PayPal methods
-            log.warn("⚠️ Using mock PayPal response for Renewable discounts - implement real PayPal integration");
-            return ResponseEntity.ok(PayPalOrderResponse.success(
-                    "MOCK_RENEWABLE_DISCOUNT_ORDER_" + System.currentTimeMillis(),
-                    "https://www.sandbox.paypal.com/checkoutnow?token=MOCK_TOKEN",
-                    request.getCustomerEmail(),
-                    request.getAmount().toString(),
-                    request.getCurrency()
-            ));
+            
+            // ✅ PRODUCTION LEVEL: Use real PayPal integration from RenewableDiscountsService
+            PayPalOrderResponse response = renewableDiscountsService.createPayPalOrder(request);
+            
+            if (response.isSuccess()) {
+                return ResponseEntity.ok(response);
+            } else {
+                return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(response);
+            }
         } catch (Exception e) {
             log.error("Error creating PayPal discount order for Renewable: {}", e.getMessage(), e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
@@ -999,16 +996,15 @@ public class DiscountsController {
     private ResponseEntity<PayPalOrderResponse> handleRenewablePayPalDiscountCapture(String orderId) {
         try {
             log.info("Capturing PayPal discount order for Renewable: {}", orderId);
-            // TODO: Implement actual PayPal order capture for Renewable discounts
-            // For now, return mock response - implement when RenewableDiscountsService has PayPal methods
-            log.warn("⚠️ Using mock PayPal capture response for Renewable discounts - implement real PayPal integration");
-            return ResponseEntity.ok(PayPalOrderResponse.success(
-                    orderId,
-                    null, // No approval URL needed for capture
-                    "mock@renewable.com",
-                    "35.00",
-                    "EUR"
-            ));
+            
+            // ✅ PRODUCTION LEVEL: Use real PayPal integration from RenewableDiscountsService
+            PayPalOrderResponse response = renewableDiscountsService.capturePayPalOrder(orderId);
+            
+            if (response.isSuccess()) {
+                return ResponseEntity.ok(response);
+            } else {
+                return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(response);
+            }
         } catch (Exception e) {
             log.error("Error capturing PayPal discount order for Renewable: {}", e.getMessage(), e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
@@ -1045,16 +1041,15 @@ public class DiscountsController {
     private ResponseEntity<PayPalOrderResponse> handlePolymersPayPalDiscountOrder(PayPalCreateOrderRequest request) {
         try {
             log.info("Creating PayPal discount order for Polymers: {}", request.getCustomerEmail());
-            // TODO: Implement actual PayPal order creation for Polymers discounts
-            // For now, return mock response - implement when PolymersDiscountsService has PayPal methods
-            log.warn("⚠️ Using mock PayPal response for Polymers discounts - implement real PayPal integration");
-            return ResponseEntity.ok(PayPalOrderResponse.success(
-                    "MOCK_POLYMERS_DISCOUNT_ORDER_" + System.currentTimeMillis(),
-                    "https://www.sandbox.paypal.com/checkoutnow?token=MOCK_TOKEN",
-                    request.getCustomerEmail(),
-                    request.getAmount().toString(),
-                    request.getCurrency()
-            ));
+            
+            // ✅ PRODUCTION LEVEL: Use real PayPal integration from PolymersDiscountsService
+            PayPalOrderResponse response = polymersDiscountsService.createPayPalOrder(request);
+            
+            if (response.isSuccess()) {
+                return ResponseEntity.ok(response);
+            } else {
+                return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(response);
+            }
         } catch (Exception e) {
             log.error("Error creating PayPal discount order for Polymers: {}", e.getMessage(), e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
@@ -1065,16 +1060,15 @@ public class DiscountsController {
     private ResponseEntity<PayPalOrderResponse> handlePolymersPayPalDiscountCapture(String orderId) {
         try {
             log.info("Capturing PayPal discount order for Polymers: {}", orderId);
-            // TODO: Implement actual PayPal order capture for Polymers discounts
-            // For now, return mock response - implement when PolymersDiscountsService has PayPal methods
-            log.warn("⚠️ Using mock PayPal capture response for Polymers discounts - implement real PayPal integration");
-            return ResponseEntity.ok(PayPalOrderResponse.success(
-                    orderId,
-                    null, // No approval URL needed for capture
-                    "mock@polymers.com",
-                    "60.00",
-                    "EUR"
-            ));
+            
+            // ✅ PRODUCTION LEVEL: Use real PayPal integration from PolymersDiscountsService
+            PayPalOrderResponse response = polymersDiscountsService.capturePayPalOrder(orderId);
+            
+            if (response.isSuccess()) {
+                return ResponseEntity.ok(response);
+            } else {
+                return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(response);
+            }
         } catch (Exception e) {
             log.error("Error capturing PayPal discount order for Polymers: {}", e.getMessage(), e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)

@@ -2,7 +2,9 @@ package com.zn.payment.optics.service;
 
 import java.io.IOException;
 import java.math.BigDecimal;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
@@ -11,6 +13,19 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import com.google.gson.JsonSyntaxException;
+import com.paypal.core.PayPalEnvironment;
+import com.paypal.core.PayPalHttpClient;
+import com.paypal.http.HttpResponse;
+import com.paypal.orders.AmountWithBreakdown;
+import com.paypal.orders.ApplicationContext;
+import com.paypal.orders.Capture;
+import com.paypal.orders.LinkDescription;
+import com.paypal.orders.Order;
+import com.paypal.orders.OrderRequest;
+import com.paypal.orders.OrdersCaptureRequest;
+import com.paypal.orders.OrdersCreateRequest;
+import com.paypal.orders.PurchaseUnit;
+import com.paypal.orders.PurchaseUnitRequest;
 import com.stripe.Stripe;
 import com.stripe.exception.SignatureVerificationException;
 import com.stripe.exception.StripeException;
@@ -19,6 +34,8 @@ import com.stripe.model.checkout.Session;
 import com.stripe.net.Webhook;
 import com.stripe.param.checkout.SessionCreateParams;
 import com.zn.payment.dto.CreateDiscountSessionRequest;
+import com.zn.payment.dto.PayPalCreateOrderRequest;
+import com.zn.payment.dto.PayPalOrderResponse;
 import com.zn.payment.optics.entity.OpticsDiscounts;
 import com.zn.payment.optics.entity.OpticsPaymentRecord;
 import com.zn.payment.optics.repository.OpticsDiscountsRepository;
@@ -30,14 +47,42 @@ import lombok.extern.slf4j.Slf4j;
 @Service
 @Slf4j
 public class OpticsDiscountsService {
-      @Value("${stripe.api.secret.key}")
+    @Value("${stripe.api.secret.key}")
     private String secretKey;
 
     @Value("${stripe.discount.webhook}")
     private String webhookSecret;
 
+    // PayPal Configuration
+    @Value("${paypal.client.id}")
+    private String paypalClientId;
+
+    @Value("${paypal.client.secret}")
+    private String paypalClientSecret;
+
+    @Value("${paypal.mode}")
+    private String paypalMode;
+
     @Autowired
     private OpticsDiscountsRepository discountsRepository;
+
+    // PayPal client instance
+    private PayPalHttpClient paypalClient;
+
+    // PayPal client initialization
+    private PayPalHttpClient getPayPalClient() {
+        if (paypalClient == null) {
+            PayPalEnvironment environment;
+            if ("live".equals(paypalMode)) {
+                environment = new PayPalEnvironment.Live(paypalClientId, paypalClientSecret);
+            } else {
+                environment = new PayPalEnvironment.Sandbox(paypalClientId, paypalClientSecret);
+            }
+            paypalClient = new PayPalHttpClient(environment);
+            log.info("✅ PayPal client initialized for Optics in {} mode", paypalMode);
+        }
+        return paypalClient;
+    }
 
     public Object createSession(CreateDiscountSessionRequest request) {
         // Validate request
@@ -765,5 +810,220 @@ public class OpticsDiscountsService {
         } catch (Exception e) {
             log.error("❌ [OpticsDiscountsService][WEBHOOK] Error in manual payment intent data extraction: {}", e.getMessage(), e);
         }
+    }
+
+    // ===== PAYPAL INTEGRATION FOR OPTICS DISCOUNTS =====
+
+    /**
+     * Create PayPal order for Optics discount payments - PRODUCTION LEVEL
+     * Following the same pattern as Nursing discount service
+     */
+    public PayPalOrderResponse createPayPalOrder(PayPalCreateOrderRequest request) {
+        log.info("Creating PayPal discount order for Optics - Amount: {} {}, Customer: {}", 
+                request.getAmount(), request.getCurrency(), request.getCustomerEmail());
+        
+        try {
+            // Validate request
+            if (request.getCustomerEmail() == null || request.getCustomerEmail().trim().isEmpty()) {
+                throw new IllegalArgumentException("Customer email is required for PayPal order");
+            }
+            
+            if (request.getAmount() == null || request.getAmount().compareTo(BigDecimal.ZERO) <= 0) {
+                throw new IllegalArgumentException("Amount must be greater than zero");
+            }
+
+            // Create PayPal order via SDK - this will return the actual PayPal order ID and approval URL
+            PayPalOrderResult orderResult = createPayPalOrderAPI(request);
+            
+            // Use PayPal's actual order ID instead of custom internal ID
+            String paypalOrderId = orderResult.getOrderId();
+            String approvalUrl = orderResult.getApprovalUrl();
+            
+            // Create discount record with PayPal's actual order ID and all form data
+            OpticsDiscounts discountRecord = new OpticsDiscounts();
+            discountRecord.setSessionId(paypalOrderId); // Store PayPal's actual order ID
+            discountRecord.setName(request.getCustomerName() != null ? request.getCustomerName() : "");
+            discountRecord.setPhone(request.getPhone() != null ? request.getPhone() : "");
+            discountRecord.setCustomerEmail(request.getCustomerEmail());
+            discountRecord.setInstituteOrUniversity(request.getInstituteOrUniversity() != null ? request.getInstituteOrUniversity() : "");
+            discountRecord.setCountry(request.getCountry() != null ? request.getCountry() : "");
+            discountRecord.setAmountTotal(request.getAmount());
+            discountRecord.setCurrency(request.getCurrency() != null ? request.getCurrency().toUpperCase() : "EUR");
+            discountRecord.setStatus(OpticsPaymentRecord.PaymentStatus.PENDING);
+            discountRecord.setPaymentStatus("unpaid");
+            discountRecord.setStripeCreatedAt(java.time.LocalDateTime.now());
+            
+            // Save discount record
+            OpticsDiscounts savedRecord = discountsRepository.save(discountRecord);
+            log.info("💾 Saved Optics PayPal discount record with ID: {} for PayPal order: {}", 
+                    savedRecord.getId(), paypalOrderId);
+            
+            log.info("✅ Created PayPal discount order for Optics: {} with approval URL: {}", paypalOrderId, approvalUrl);
+            
+            return PayPalOrderResponse.success(
+                    paypalOrderId, 
+                    approvalUrl, 
+                    request.getCustomerEmail(),
+                    request.getAmount().toString(),
+                    request.getCurrency()
+            );
+            
+        } catch (Exception e) {
+            log.error("❌ Error creating PayPal discount order for Optics: {}", e.getMessage(), e);
+            return PayPalOrderResponse.error("paypal_discount_order_creation_failed: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Create PayPal order via PayPal SDK for discount payments - PRODUCTION READY
+     * Following exact same pattern as regular payments
+     */
+    private PayPalOrderResult createPayPalOrderAPI(PayPalCreateOrderRequest request) {
+        try {
+            log.info("🚀 Creating real PayPal discount order via SDK for Optics");
+            
+            // Build PayPal order request using SDK
+            OrderRequest orderRequest = new OrderRequest();
+            orderRequest.checkoutPaymentIntent("CAPTURE");
+            
+            // Set application context
+            ApplicationContext applicationContext = new ApplicationContext()
+                .returnUrl(request.getSuccessUrl() + "?paymentMethod=paypal&type=discount")
+                .cancelUrl(request.getCancelUrl() + "?paymentMethod=paypal&type=discount&cancelled=true")
+                .brandName("Global Optics Summit - Discount")
+                .landingPage("BILLING")
+                .userAction("PAY_NOW");
+            
+            orderRequest.applicationContext(applicationContext);
+            
+            // Create purchase units
+            List<PurchaseUnitRequest> purchaseUnits = new ArrayList<>();
+            
+            // Create amount breakdown
+            AmountWithBreakdown amountBreakdown = new AmountWithBreakdown()
+                .currencyCode(request.getCurrency() != null ? request.getCurrency().toUpperCase() : "EUR")
+                .value(request.getAmount().toString());
+            
+            PurchaseUnitRequest purchaseUnitRequest = new PurchaseUnitRequest()
+                .referenceId("OPTICS_DISCOUNT_" + System.currentTimeMillis())
+                .description("Global Optics Summit Discount - " + request.getCustomerEmail())
+                .customId("OPTICS_DISCOUNT_" + System.currentTimeMillis())
+                .softDescriptor("OPTICSSUMMIT")
+                .amountWithBreakdown(amountBreakdown);
+            
+            purchaseUnits.add(purchaseUnitRequest);
+            orderRequest.purchaseUnits(purchaseUnits);
+            
+            // Create the order
+            OrdersCreateRequest ordersCreateRequest = new OrdersCreateRequest();
+            ordersCreateRequest.prefer("return=representation");
+            ordersCreateRequest.requestBody(orderRequest);
+            
+            HttpResponse<Order> response = getPayPalClient().execute(ordersCreateRequest);
+            Order order = response.result();
+            
+            log.info("✅ PayPal discount order created successfully for Optics: {} with status: {}", order.id(), order.status());
+            
+            // Extract approval URL
+            String approvalUrl = null;
+            for (LinkDescription link : order.links()) {
+                if ("approve".equals(link.rel())) {
+                    approvalUrl = link.href();
+                    break;
+                }
+            }
+            
+            if (approvalUrl == null) {
+                throw new RuntimeException("PayPal approval URL not found in response");
+            }
+            
+            log.info("🔗 PayPal discount approval URL generated for Optics: {}", approvalUrl);
+            
+            return new PayPalOrderResult(order.id(), approvalUrl);
+            
+        } catch (Exception e) {
+            log.error("❌ Error creating PayPal discount order via SDK for Optics: {}", e.getMessage(), e);
+            throw new RuntimeException("PayPal SDK error: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Capture PayPal order for Optics discount payments
+     */
+    public PayPalOrderResponse capturePayPalOrder(String orderId) {
+        log.info("Capturing PayPal discount order for Optics: {}", orderId);
+        
+        try {
+            // Capture the PayPal order
+            OrdersCaptureRequest ordersCaptureRequest = new OrdersCaptureRequest(orderId);
+            ordersCaptureRequest.prefer("return=representation");
+            
+            HttpResponse<Order> response = getPayPalClient().execute(ordersCaptureRequest);
+            Order order = response.result();
+            
+            log.info("✅ PayPal discount order captured successfully for Optics: {} with status: {}", order.id(), order.status());
+            
+            // Update discount record in database
+            OpticsDiscounts discountRecord = discountsRepository.findBySessionId(orderId);
+            if (discountRecord != null) {
+                discountRecord.setStatus(OpticsPaymentRecord.PaymentStatus.COMPLETED);
+                discountRecord.setPaymentStatus("paid");
+                discountRecord.setUpdatedAt(java.time.LocalDateTime.now());
+                
+                // Extract payment details from PayPal response
+                if (order.purchaseUnits() != null && !order.purchaseUnits().isEmpty()) {
+                    PurchaseUnit purchaseUnit = order.purchaseUnits().get(0);
+                    if (purchaseUnit.payments() != null && 
+                        purchaseUnit.payments().captures() != null && 
+                        !purchaseUnit.payments().captures().isEmpty()) {
+                        
+                        Capture capture = purchaseUnit.payments().captures().get(0);
+                        if (capture.amount() != null) {
+                            try {
+                                BigDecimal capturedAmount = new BigDecimal(capture.amount().value());
+                                discountRecord.setAmountTotal(capturedAmount);
+                                discountRecord.setCurrency(capture.amount().currencyCode());
+                            } catch (NumberFormatException e) {
+                                log.warn("⚠️ Could not parse captured amount: {}", capture.amount().value());
+                            }
+                        }
+                    }
+                }
+                
+                OpticsDiscounts updatedRecord = discountsRepository.save(discountRecord);
+                log.info("✅ Updated Optics discount record status to COMPLETED for PayPal order: {}", orderId);
+                
+                return PayPalOrderResponse.success(
+                        orderId,
+                        null, // No approval URL needed for capture
+                        updatedRecord.getCustomerEmail(),
+                        updatedRecord.getAmountTotal().toString(),
+                        updatedRecord.getCurrency()
+                );
+            } else {
+                log.error("❌ OpticsDiscounts record not found for PayPal order ID: {}", orderId);
+                return PayPalOrderResponse.error("discount_record_not_found");
+            }
+            
+        } catch (Exception e) {
+            log.error("❌ Error capturing PayPal discount order for Optics {}: {}", orderId, e.getMessage(), e);
+            return PayPalOrderResponse.error("paypal_capture_failed: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Helper class for PayPal order creation result
+     */
+    private static class PayPalOrderResult {
+        private final String orderId;
+        private final String approvalUrl;
+        
+        public PayPalOrderResult(String orderId, String approvalUrl) {
+            this.orderId = orderId;
+            this.approvalUrl = approvalUrl;
+        }
+        
+        public String getOrderId() { return orderId; }
+        public String getApprovalUrl() { return approvalUrl; }
     }
 }

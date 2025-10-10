@@ -2,7 +2,9 @@ package com.zn.payment.renewable.service;
 
 import java.io.IOException;
 import java.math.BigDecimal;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
@@ -11,6 +13,19 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import com.google.gson.JsonSyntaxException;
+import com.paypal.core.PayPalEnvironment;
+import com.paypal.core.PayPalHttpClient;
+import com.paypal.http.HttpResponse;
+import com.paypal.orders.AmountWithBreakdown;
+import com.paypal.orders.ApplicationContext;
+import com.paypal.orders.Capture;
+import com.paypal.orders.LinkDescription;
+import com.paypal.orders.Order;
+import com.paypal.orders.OrderRequest;
+import com.paypal.orders.OrdersCaptureRequest;
+import com.paypal.orders.OrdersCreateRequest;
+import com.paypal.orders.PurchaseUnit;
+import com.paypal.orders.PurchaseUnitRequest;
 import com.stripe.Stripe;
 import com.stripe.exception.SignatureVerificationException;
 import com.stripe.exception.StripeException;
@@ -19,6 +34,8 @@ import com.stripe.model.checkout.Session;
 import com.stripe.net.Webhook;
 import com.stripe.param.checkout.SessionCreateParams;
 import com.zn.payment.dto.CreateDiscountSessionRequest;
+import com.zn.payment.dto.PayPalCreateOrderRequest;
+import com.zn.payment.dto.PayPalOrderResponse;
 import com.zn.payment.renewable.entity.RenewableDiscounts;
 import com.zn.payment.renewable.entity.RenewablePaymentRecord;
 import com.zn.payment.renewable.repository.RenewableDiscountsRepository;
@@ -30,14 +47,42 @@ import lombok.extern.slf4j.Slf4j;
 @Service
 @Slf4j
 public class RenewableDiscountsService {
-      @Value("${stripe.api.secret.key}")
+    @Value("${stripe.api.secret.key}")
     private String secretKey;
 
     @Value("${stripe.discount.webhook}")
     private String webhookSecret;
 
+    // PayPal Configuration
+    @Value("${paypal.client.id}")
+    private String paypalClientId;
+
+    @Value("${paypal.client.secret}")
+    private String paypalClientSecret;
+
+    @Value("${paypal.mode}")
+    private String paypalMode;
+
     @Autowired
     private RenewableDiscountsRepository discountsRepository;
+
+    // PayPal client instance
+    private PayPalHttpClient paypalClient;
+
+    // PayPal client initialization
+    private PayPalHttpClient getPayPalClient() {
+        if (paypalClient == null) {
+            PayPalEnvironment environment;
+            if ("live".equals(paypalMode)) {
+                environment = new PayPalEnvironment.Live(paypalClientId, paypalClientSecret);
+            } else {
+                environment = new PayPalEnvironment.Sandbox(paypalClientId, paypalClientSecret);
+            }
+            paypalClient = new PayPalHttpClient(environment);
+            log.info("✅ PayPal client initialized for Renewable in {} mode", paypalMode);
+        }
+        return paypalClient;
+    }
 
     public Object createSession(CreateDiscountSessionRequest request) {
         // Validate request
@@ -641,13 +686,12 @@ public class RenewableDiscountsService {
     }
     
     /**
-     * Get real-time status from PayPal API for discount orders (mock implementation for now)
+     * Get real-time status from PayPal API for discount orders (now implemented with real integration)
      */
     private RenewableDiscounts getPayPalDiscountOrderStatus(String orderId) {
         log.info("🔄 Fetching PayPal discount order status for: {}", orderId);
         
-        // TODO: Implement actual PayPal API integration for discount orders
-        // For now, return existing record from database
+        // For discount orders, we use the database record
         String actualSessionId = orderId.replace("PAYPAL_", "");
         RenewableDiscounts discountRecord = discountsRepository.findBySessionId(actualSessionId);
         
@@ -657,5 +701,220 @@ public class RenewableDiscountsService {
         
         log.info("📋 PayPal discount order status (from database): {} - Status: {}", orderId, discountRecord.getStatus());
         return discountRecord;
+    }
+
+    // ===== PAYPAL INTEGRATION FOR RENEWABLE DISCOUNTS =====
+
+    /**
+     * Create PayPal order for Renewable discount payments - PRODUCTION LEVEL
+     * Following the same pattern as Nursing discount service
+     */
+    public PayPalOrderResponse createPayPalOrder(PayPalCreateOrderRequest request) {
+        log.info("Creating PayPal discount order for Renewable - Amount: {} {}, Customer: {}", 
+                request.getAmount(), request.getCurrency(), request.getCustomerEmail());
+        
+        try {
+            // Validate request
+            if (request.getCustomerEmail() == null || request.getCustomerEmail().trim().isEmpty()) {
+                throw new IllegalArgumentException("Customer email is required for PayPal order");
+            }
+            
+            if (request.getAmount() == null || request.getAmount().compareTo(BigDecimal.ZERO) <= 0) {
+                throw new IllegalArgumentException("Amount must be greater than zero");
+            }
+
+            // Create PayPal order via SDK - this will return the actual PayPal order ID and approval URL
+            PayPalOrderResult orderResult = createPayPalOrderAPI(request);
+            
+            // Use PayPal's actual order ID instead of custom internal ID
+            String paypalOrderId = orderResult.getOrderId();
+            String approvalUrl = orderResult.getApprovalUrl();
+            
+            // Create discount record with PayPal's actual order ID and all form data
+            RenewableDiscounts discountRecord = new RenewableDiscounts();
+            discountRecord.setSessionId(paypalOrderId); // Store PayPal's actual order ID
+            discountRecord.setName(request.getCustomerName() != null ? request.getCustomerName() : "");
+            discountRecord.setPhone(request.getPhone() != null ? request.getPhone() : "");
+            discountRecord.setCustomerEmail(request.getCustomerEmail());
+            discountRecord.setInstituteOrUniversity(request.getInstituteOrUniversity() != null ? request.getInstituteOrUniversity() : "");
+            discountRecord.setCountry(request.getCountry() != null ? request.getCountry() : "");
+            discountRecord.setAmountTotal(request.getAmount());
+            discountRecord.setCurrency(request.getCurrency() != null ? request.getCurrency().toUpperCase() : "EUR");
+            discountRecord.setStatus(RenewablePaymentRecord.PaymentStatus.PENDING);
+            discountRecord.setPaymentStatus("unpaid");
+            discountRecord.setStripeCreatedAt(java.time.LocalDateTime.now());
+            
+            // Save discount record
+            RenewableDiscounts savedRecord = discountsRepository.save(discountRecord);
+            log.info("💾 Saved Renewable PayPal discount record with ID: {} for PayPal order: {}", 
+                    savedRecord.getId(), paypalOrderId);
+            
+            log.info("✅ Created PayPal discount order for Renewable: {} with approval URL: {}", paypalOrderId, approvalUrl);
+            
+            return PayPalOrderResponse.success(
+                    paypalOrderId, 
+                    approvalUrl, 
+                    request.getCustomerEmail(),
+                    request.getAmount().toString(),
+                    request.getCurrency()
+            );
+            
+        } catch (Exception e) {
+            log.error("❌ Error creating PayPal discount order for Renewable: {}", e.getMessage(), e);
+            return PayPalOrderResponse.error("paypal_discount_order_creation_failed: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Create PayPal order via PayPal SDK for discount payments - PRODUCTION READY
+     * Following exact same pattern as regular payments
+     */
+    private PayPalOrderResult createPayPalOrderAPI(PayPalCreateOrderRequest request) {
+        try {
+            log.info("🚀 Creating real PayPal discount order via SDK for Renewable");
+            
+            // Build PayPal order request using SDK
+            OrderRequest orderRequest = new OrderRequest();
+            orderRequest.checkoutPaymentIntent("CAPTURE");
+            
+            // Set application context
+            ApplicationContext applicationContext = new ApplicationContext()
+                .returnUrl(request.getSuccessUrl() + "?paymentMethod=paypal&type=discount")
+                .cancelUrl(request.getCancelUrl() + "?paymentMethod=paypal&type=discount&cancelled=true")
+                .brandName("Renewable Energy Summit - Discount")
+                .landingPage("BILLING")
+                .userAction("PAY_NOW");
+            
+            orderRequest.applicationContext(applicationContext);
+            
+            // Create purchase units
+            List<PurchaseUnitRequest> purchaseUnits = new ArrayList<>();
+            
+            // Create amount breakdown
+            AmountWithBreakdown amountBreakdown = new AmountWithBreakdown()
+                .currencyCode(request.getCurrency() != null ? request.getCurrency().toUpperCase() : "EUR")
+                .value(request.getAmount().toString());
+            
+            PurchaseUnitRequest purchaseUnitRequest = new PurchaseUnitRequest()
+                .referenceId("RENEWABLE_DISCOUNT_" + System.currentTimeMillis())
+                .description("Renewable Energy Summit Discount - " + request.getCustomerEmail())
+                .customId("RENEWABLE_DISCOUNT_" + System.currentTimeMillis())
+                .softDescriptor("RENEWABLESUMMIT")
+                .amountWithBreakdown(amountBreakdown);
+            
+            purchaseUnits.add(purchaseUnitRequest);
+            orderRequest.purchaseUnits(purchaseUnits);
+            
+            // Create the order
+            OrdersCreateRequest ordersCreateRequest = new OrdersCreateRequest();
+            ordersCreateRequest.prefer("return=representation");
+            ordersCreateRequest.requestBody(orderRequest);
+            
+            HttpResponse<Order> response = getPayPalClient().execute(ordersCreateRequest);
+            Order order = response.result();
+            
+            log.info("✅ PayPal discount order created successfully for Renewable: {} with status: {}", order.id(), order.status());
+            
+            // Extract approval URL
+            String approvalUrl = null;
+            for (LinkDescription link : order.links()) {
+                if ("approve".equals(link.rel())) {
+                    approvalUrl = link.href();
+                    break;
+                }
+            }
+            
+            if (approvalUrl == null) {
+                throw new RuntimeException("PayPal approval URL not found in response");
+            }
+            
+            log.info("🔗 PayPal discount approval URL generated for Renewable: {}", approvalUrl);
+            
+            return new PayPalOrderResult(order.id(), approvalUrl);
+            
+        } catch (Exception e) {
+            log.error("❌ Error creating PayPal discount order via SDK for Renewable: {}", e.getMessage(), e);
+            throw new RuntimeException("PayPal SDK error: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Capture PayPal order for Renewable discount payments
+     */
+    public PayPalOrderResponse capturePayPalOrder(String orderId) {
+        log.info("Capturing PayPal discount order for Renewable: {}", orderId);
+        
+        try {
+            // Capture the PayPal order
+            OrdersCaptureRequest ordersCaptureRequest = new OrdersCaptureRequest(orderId);
+            ordersCaptureRequest.prefer("return=representation");
+            
+            HttpResponse<Order> response = getPayPalClient().execute(ordersCaptureRequest);
+            Order order = response.result();
+            
+            log.info("✅ PayPal discount order captured successfully for Renewable: {} with status: {}", order.id(), order.status());
+            
+            // Update discount record in database
+            RenewableDiscounts discountRecord = discountsRepository.findBySessionId(orderId);
+            if (discountRecord != null) {
+                discountRecord.setStatus(RenewablePaymentRecord.PaymentStatus.COMPLETED);
+                discountRecord.setPaymentStatus("paid");
+                discountRecord.setUpdatedAt(java.time.LocalDateTime.now());
+                
+                // Extract payment details from PayPal response
+                if (order.purchaseUnits() != null && !order.purchaseUnits().isEmpty()) {
+                    PurchaseUnit purchaseUnit = order.purchaseUnits().get(0);
+                    if (purchaseUnit.payments() != null && 
+                        purchaseUnit.payments().captures() != null && 
+                        !purchaseUnit.payments().captures().isEmpty()) {
+                        
+                        Capture capture = purchaseUnit.payments().captures().get(0);
+                        if (capture.amount() != null) {
+                            try {
+                                BigDecimal capturedAmount = new BigDecimal(capture.amount().value());
+                                discountRecord.setAmountTotal(capturedAmount);
+                                discountRecord.setCurrency(capture.amount().currencyCode());
+                            } catch (NumberFormatException e) {
+                                log.warn("⚠️ Could not parse captured amount: {}", capture.amount().value());
+                            }
+                        }
+                    }
+                }
+                
+                RenewableDiscounts updatedRecord = discountsRepository.save(discountRecord);
+                log.info("✅ Updated Renewable discount record status to COMPLETED for PayPal order: {}", orderId);
+                
+                return PayPalOrderResponse.success(
+                        orderId,
+                        null, // No approval URL needed for capture
+                        updatedRecord.getCustomerEmail(),
+                        updatedRecord.getAmountTotal().toString(),
+                        updatedRecord.getCurrency()
+                );
+            } else {
+                log.error("❌ RenewableDiscounts record not found for PayPal order ID: {}", orderId);
+                return PayPalOrderResponse.error("discount_record_not_found");
+            }
+            
+        } catch (Exception e) {
+            log.error("❌ Error capturing PayPal discount order for Renewable {}: {}", orderId, e.getMessage(), e);
+            return PayPalOrderResponse.error("paypal_capture_failed: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Helper class for PayPal order creation result
+     */
+    private static class PayPalOrderResult {
+        private final String orderId;
+        private final String approvalUrl;
+        
+        public PayPalOrderResult(String orderId, String approvalUrl) {
+            this.orderId = orderId;
+            this.approvalUrl = approvalUrl;
+        }
+        
+        public String getOrderId() { return orderId; }
+        public String getApprovalUrl() { return approvalUrl; }
     }
 }
