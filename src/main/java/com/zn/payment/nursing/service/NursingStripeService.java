@@ -2055,22 +2055,9 @@ public NursingPaymentResponseDTO retrieveSession(String sessionId) throws Stripe
         try {
             log.info("🔗 Capturing PayPal order via SDK: {} for amount: {} EUR", orderId, amount);
             
-            // First, get the order details to extract the PayPal order ID
-            // The orderId we have is our internal order ID, we need to find the PayPal order ID
-            // For this implementation, we'll assume the orderId contains the PayPal order ID
-            // In a real scenario, you might store the PayPal order ID separately
-            
-            // Extract PayPal order ID from our internal order ID
-            // Format: "PAYPAL_ORDER_{timestamp}_{registrationId}"
-            // The actual PayPal order ID would be stored in the payment record or retrieved differently
-            
-            // For now, let's assume we can extract or retrieve the actual PayPal order ID
-            String paypalOrderId = extractPayPalOrderId(orderId);
-            
-            if (paypalOrderId == null) {
-                log.error("❌ Could not extract PayPal order ID from: {}", orderId);
-                return false;
-            }
+            // The orderId passed here is now the actual PayPal order ID (not internal ID)
+            // No need to extract - use it directly
+            String paypalOrderId = orderId;
             
             // Create capture request
             OrdersCaptureRequest ordersCaptureRequest = new OrdersCaptureRequest(paypalOrderId);
@@ -2118,41 +2105,6 @@ public NursingPaymentResponseDTO retrieveSession(String sessionId) throws Stripe
         } catch (Exception e) {
             log.error("❌ Error capturing PayPal order via SDK: {}", e.getMessage(), e);
             return false;
-        }
-    }
-    
-    /**
-     * Extract PayPal order ID from internal order ID
-     * This is a helper method to retrieve the actual PayPal order ID
-     * In production, you might store this mapping in the database
-     */
-    private String extractPayPalOrderId(String internalOrderId) {
-        try {
-            // In a real implementation, you would:
-            // 1. Query the payment record to get the stored PayPal order ID
-            // 2. Or use a mapping table to link internal IDs to PayPal IDs
-            
-            // For now, let's look up the payment record and assume we store the PayPal order ID there
-            java.util.Optional<NursingPaymentRecord> paymentRecordOpt = 
-                paymentRecordRepository.findBySessionId(internalOrderId);
-                
-            if (paymentRecordOpt.isPresent()) {
-                // If we stored the PayPal order ID in a field (you might need to add this field)
-                // For now, we'll extract from session metadata or use the session ID
-                
-                // Temporary: Use the internal order ID as PayPal order ID
-                // In production, you should store the actual PayPal order ID returned from creation
-                log.warn("⚠️ Using internal order ID as PayPal order ID (should be updated in production): {}", 
-                        internalOrderId);
-                return internalOrderId;
-            }
-            
-            log.error("❌ Payment record not found for internal order ID: {}", internalOrderId);
-            return null;
-            
-        } catch (Exception e) {
-            log.error("❌ Error extracting PayPal order ID: {}", e.getMessage(), e);
-            return null;
         }
     }
 
