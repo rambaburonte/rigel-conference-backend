@@ -452,6 +452,38 @@ public class NursingStripeService {
         paymentRecordRepository.save(record);
         log.info("💾 Saved NursingPaymentRecord for session: {}", session.getId());
 
+        // ✅ CRITICAL: Link payment record to existing registration form if available
+        try {
+            String customerEmail = request.getEmail();
+            if (customerEmail != null && !customerEmail.trim().isEmpty()) {
+                // Find the most recent registration form for this customer email
+                NursingRegistrationForm existingRegistration = 
+                    registrationFormRepository.findTopByEmailOrderByIdDesc(customerEmail);
+                
+                if (existingRegistration != null && existingRegistration.getPaymentRecord() == null) {
+                    // Link them together bidirectionally
+                    existingRegistration.setPaymentRecord(record);
+                    record.setRegistrationForm(existingRegistration);
+                    
+                    // Save both entities to persist the relationship
+                    registrationFormRepository.save(existingRegistration);
+                    paymentRecordRepository.save(record);
+                    
+                    log.info("🔗 Linked existing Nursing registration form ID: {} to payment record ID: {} for session: {}", 
+                            existingRegistration.getId(), record.getId(), session.getId());
+                } else if (existingRegistration != null) {
+                    log.info("ℹ️ Registration form ID: {} already has a payment record linked for email: {}", 
+                            existingRegistration.getId(), customerEmail);
+                } else {
+                    log.info("ℹ️ No existing registration form found for email: {} - will be linked later during webhook processing", 
+                            customerEmail);
+                }
+            }
+        } catch (Exception e) {
+            log.error("❌ Error linking registration form to payment record for session {}: {}", session.getId(), e.getMessage());
+            // Don't fail the payment creation if linking fails - continue with the payment process
+        }
+
         // 🔄 Auto-sync discount table when payment record is created
         autoSyncDiscountOnPaymentUpdate(record);
 
@@ -582,6 +614,39 @@ public class NursingStripeService {
         paymentRecordRepository.save(record);
         log.info("💾 Saved NursingPaymentRecord for session: {} with NursingPricingConfig: {}", 
                 session.getId(), pricingConfig.getId());
+        
+        // ✅ CRITICAL: Link payment record to existing registration form if available
+        try {
+            String customerEmail = request.getEmail();
+            if (customerEmail != null && !customerEmail.trim().isEmpty()) {
+                // Find the most recent registration form for this customer email
+                NursingRegistrationForm existingRegistration = 
+                    registrationFormRepository.findTopByEmailOrderByIdDesc(customerEmail);
+                
+                if (existingRegistration != null && existingRegistration.getPaymentRecord() == null) {
+                    // Link them together bidirectionally
+                    existingRegistration.setPaymentRecord(record);
+                    record.setRegistrationForm(existingRegistration);
+                    
+                    // Save both entities to persist the relationship
+                    registrationFormRepository.save(existingRegistration);
+                    paymentRecordRepository.save(record);
+                    
+                    log.info("🔗 Linked existing Nursing registration form ID: {} to payment record ID: {} for session: {}", 
+                            existingRegistration.getId(), record.getId(), session.getId());
+                } else if (existingRegistration != null) {
+                    log.info("ℹ️ Registration form ID: {} already has a payment record linked for email: {}", 
+                            existingRegistration.getId(), customerEmail);
+                } else {
+                    log.info("ℹ️ No existing registration form found for email: {} - will be linked later during webhook processing", 
+                            customerEmail);
+                }
+            }
+        } catch (Exception e) {
+            log.error("❌ Error linking registration form to payment record for session {}: {}", session.getId(), e.getMessage());
+            // Don't fail the payment creation if linking fails - continue with the payment process
+        }
+        
         // ToDo: Implement auto-sync for discount table
         // 🔄 Auto-sync discount table when payment record is created
       //  autoSyncDiscountOnPaymentUpdate(record);
@@ -685,6 +750,38 @@ public class NursingStripeService {
         // 6. Fetch the saved NursingPaymentRecord from database
         NursingPaymentRecord paymentRecord = paymentRecordRepository.findBySessionId(session.getId())
             .orElseThrow(() -> new RuntimeException("NursingPaymentRecord not found after creation for session: " + session.getId()));
+        
+        // ✅ CRITICAL: Link payment record to existing registration form if available
+        try {
+            String customerEmail = request.getEmail();
+            if (customerEmail != null && !customerEmail.trim().isEmpty()) {
+                // Find the most recent registration form for this customer email
+                NursingRegistrationForm existingRegistration = 
+                    registrationFormRepository.findTopByEmailOrderByIdDesc(customerEmail);
+                
+                if (existingRegistration != null && existingRegistration.getPaymentRecord() == null) {
+                    // Link them together bidirectionally
+                    existingRegistration.setPaymentRecord(paymentRecord);
+                    paymentRecord.setRegistrationForm(existingRegistration);
+                    
+                    // Save both entities to persist the relationship
+                    registrationFormRepository.save(existingRegistration);
+                    paymentRecordRepository.save(paymentRecord);
+                    
+                    log.info("🔗 Linked existing Nursing registration form ID: {} to payment record ID: {} for session: {}", 
+                            existingRegistration.getId(), paymentRecord.getId(), session.getId());
+                } else if (existingRegistration != null) {
+                    log.info("ℹ️ Registration form ID: {} already has a payment record linked for email: {}", 
+                            existingRegistration.getId(), customerEmail);
+                } else {
+                    log.info("ℹ️ No existing registration form found for email: {} - will be linked later during webhook processing", 
+                            customerEmail);
+                }
+            }
+        } catch (Exception e) {
+            log.error("❌ Error linking registration form to payment record for session {}: {}", session.getId(), e.getMessage());
+            // Don't fail the payment creation if linking fails - continue with the payment process
+        }
         
         // 7. Create complete response DTO with both Stripe and DB information
         NursingPaymentResponseDTO response = createCompleteResponseDTO(session, paymentRecord);
@@ -1879,6 +1976,13 @@ public NursingPaymentResponseDTO retrieveSession(String sessionId) throws Stripe
             NursingPaymentRecord savedRecord = paymentRecordRepository.save(paymentRecord);
             log.info("💾 Saved Nursing PayPal payment record with ID: {} for PayPal order: {}", 
                     savedRecord.getId(), paypalOrderId);
+            
+            // ✅ CRITICAL: Establish bidirectional relationship between registration form and payment record
+            // Update the registration form to link back to the payment record
+            registrationForm.setPaymentRecord(savedRecord);
+            registrationFormRepository.save(registrationForm);
+            log.info("🔗 Linked Nursing registration form ID: {} to payment record ID: {} for PayPal order: {}", 
+                    registrationForm.getId(), savedRecord.getId(), paypalOrderId);
             
             log.info("✅ Created PayPal order for Nursing: {} with approval URL: {}", paypalOrderId, approvalUrl);
             
